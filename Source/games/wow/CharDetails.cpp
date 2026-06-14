@@ -567,8 +567,10 @@ void CharDetails::refreshGeosets()
 {
   geosets.clear();
 
-  for (auto i = 0; i < NUM_GEOSETS; i++)
-    geosets[i] = 1;
+  // NOTE: default geoset visibility is decided per-geoset in WoWModel::refresh()
+  // using wow.export's rule (show id 0 / *01 / 32xx face; hide 17xx eye-glow /
+  // 35xx earrings). This map only records explicit toggles and customization
+  // choices, which override those defaults via setGeosetGroupDisplay().
 
   if (showEars)
     geosets[CG_EARS] = 2;

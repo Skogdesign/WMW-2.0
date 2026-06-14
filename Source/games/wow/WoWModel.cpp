@@ -2564,7 +2564,19 @@ void WoWModel::refresh()
   // If model is one of these races, show the feet (don't wear boots)
   cd.showFeet = infos.barefeet;
 
-  // Reset geosets
+  // Default geoset visibility, copied from wow.export (character-appearance.js):
+  // show geoset id 0, any geoset whose id ends in "01", and the whole face group
+  // (32xx); hide eye-glow (17xx) and earrings (35xx). Customization and equipment
+  // (cd.geosets, applied below) then override specific groups.
+  for (auto * g : geosets)
+  {
+    const QString idStr = QString::number(g->id);
+    const bool isDefault = (g->id == 0 || idStr.endsWith("01") || idStr.startsWith("32"));
+    const bool isHiddenDefault = idStr.startsWith("17") || idStr.startsWith("35");
+    g->display = isDefault && !isHiddenDefault;
+  }
+
+  // Apply geoset overrides from customization + equipment
   for (auto geo : cd.geosets)
     setGeosetGroupDisplay((CharGeosets)geo.first, geo.second);
 

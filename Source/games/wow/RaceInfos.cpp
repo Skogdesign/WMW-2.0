@@ -16,7 +16,7 @@ void RaceInfos::init()
     GAMEDATABASE.sqlQuery("SELECT ChrRaces.ClientPrefix, ChrRaces.ID, ChrRaces.Flags, ChrModel.Sex, CreatureModelData.FileDataID, ChrModel.CharComponentTextureLayoutID, "
                           "ChrRaces.MaleModelFallbackRaceID, ChrRaces.MaleModelFallbackSex, ChrRaces.MaleTextureFallbackRaceID, ChrRaces.MaleTextureFallbackSex, "
                           "ChrRaces.FemaleModelFallbackRaceID, ChrRaces.FemaleModelFallbackSex, ChrRaces.FemaleTextureFallbackRaceID, ChrRaces.FemaleTextureFallbackSex, "
-                          "ChrRaceXChrModel.ChrModelID "
+                          "ChrRaceXChrModel.ChrModelID, ChrRaces.ClientFileString "
                           "FROM ChrRaceXChrModel "
                           "LEFT JOIN ChrRaces ON ChrRaces.ID = ChrRaceXChrModel.ChrRacesID "
                           "LEFT JOIN ChrModel ON ChrModel.ID = ChrRaceXChrModel.ChrModelID "
@@ -57,6 +57,10 @@ void RaceInfos::init()
     }
 
     infos.ChrModelID.push_back(race[14].toInt());
+
+    // lowercased race directory name (matches the character/<race>/<sex>/ path)
+    if (race.size() > 15)
+      infos.clientFileString = race[15].toLower().toStdString();
 
     infos.isHD = GAMEDIRECTORY.getFile(modelfileid)->fullname().contains("_hd") ? true : false;
 
@@ -127,6 +131,22 @@ bool RaceInfos::getRaceInfosForFileID(int fileid, RaceInfos & infos)
   }
 
   return false;
+}
+
+bool RaceInfos::getRaceInfosForName(const std::string & raceName, int sex, RaceInfos & out)
+{
+  bool found = false;
+  for (const auto & r : RACES)
+  {
+    if (r.second.sexID == sex && !r.second.clientFileString.empty() && r.second.clientFileString == raceName)
+    {
+      out = r.second;
+      found = true;
+      if (r.second.isHD) // prefer the HD model when several match
+        break;
+    }
+  }
+  return found;
 }
 
 int RaceInfos::getFileIDForRaceSex(const int & race, const int & sex)

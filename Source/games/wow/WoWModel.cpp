@@ -845,8 +845,31 @@ void WoWModel::initRaceInfos()
   if (SDReplacementModel.count(fdid)) // if it's an old *_sdr model, use the file ID of its HD counterpart for race info
     fdid = SDReplacementModel[fdid];
 
-  if(!RaceInfos::getRaceInfosForFileID(fdid,infos))
-    LOG_ERROR << "Unable to retrieve race infos for model" << gamefile->fullname() << gamefile->fileDataId();
+  if (RaceInfos::getRaceInfosForFileID(fdid, infos))
+    return;
+
+  // The loaded file isn't the canonical race model in the map (e.g. a legacy
+  // character/<race>/<sex>/*.m2 picked from the file tree, whose FileDataID is
+  // not what modern CreatureModelData references). Resolve race + sex from the
+  // model path so the character still gets proper race info, skin and geosets
+  // instead of falling back to a raw-creature render.
+  const QString path = gamefile->fullname().toLower();
+  if (path.startsWith("character/"))
+  {
+    const QStringList parts = path.split('/');
+    if (parts.size() >= 3)
+    {
+      const std::string raceName = parts[1].toStdString();
+      const int sex = (parts[2] == "female") ? GENDER_FEMALE : GENDER_MALE;
+      if (RaceInfos::getRaceInfosForName(raceName, sex, infos))
+      {
+        LOG_INFO << "Resolved race infos by path for" << gamefile->fullname() << "(" << parts[1] << "/" << parts[2] << ")";
+        return;
+      }
+    }
+  }
+
+  LOG_ERROR << "Unable to retrieve race infos for model" << gamefile->fullname() << gamefile->fileDataId();
 }
 
 

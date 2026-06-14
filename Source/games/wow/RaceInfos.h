@@ -26,6 +26,7 @@ class _RACEINFOS_API_ RaceInfos
     bool isHD;
     bool barefeet;
     std::string prefix;
+    std::string clientFileString; // lowercased ChrRaces.ClientFileString, e.g. "bloodelf"
     int modelFallbackRaceID;
     int modelFallbackSexID;
     int textureFallbackRaceID;
@@ -35,6 +36,9 @@ class _RACEINFOS_API_ RaceInfos
     static void init();
     static int getHDModelForFileID(int);
     static bool getRaceInfosForFileID(int, RaceInfos &);
+    // Resolve by race directory name (lowercased ClientFileString) + sex, used as a
+    // fallback when a character model file isn't the canonical race model in the map.
+    static bool getRaceInfosForName(const std::string & raceName, int sex, RaceInfos &);
     static int getFileIDForRaceSex(const int & race, const int & sex);
 
   private:

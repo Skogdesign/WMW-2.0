@@ -48,6 +48,7 @@
   <table name="ChrRaces">
     <field type="int32" name="ID" primary="yes" />
     <field type="text" name="ClientPrefix" pos="0" />
+    <field type="text" name="ClientFileString" />
     <field type="int32" name="Flags" pos="15" />
     <field type="int32"  name="MaleModelFallbackRaceID" pos="33" />
 	<field type="int32"  name="FemaleModelFallbackRaceID" pos="34" />

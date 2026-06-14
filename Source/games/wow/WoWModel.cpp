@@ -1095,6 +1095,15 @@ void WoWModel::initAnimated()
     }
   }
 
+  // Sanitize keyBoneLookup. Some modern character models report a bogus keybone
+  // count/offset (e.g. 291 on orcmale_hd), leaving garbage bone indices here. A
+  // positive-but-out-of-range index would later run off bones[] during animate()
+  // and crash (the usage only checks for -1, not the upper bound). Invalidate any
+  // entry that doesn't reference a real bone so it is simply skipped.
+  for (size_t k = 0; k < BONE_MAX; k++)
+    if (keyBoneLookup[k] < -1 || keyBoneLookup[k] >= static_cast<int>(bones.size()))
+      keyBoneLookup[k] = -1;
+
   // free MPQFile
   for (auto it : data.animfiles)
   {

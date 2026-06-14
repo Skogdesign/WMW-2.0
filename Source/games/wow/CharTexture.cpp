@@ -102,7 +102,6 @@ void CharTexture::initRegions()
     for (auto& r : regions.values)
     {
       const CharRegionCoords coords = { r[1].toInt(), r[2].toInt(), r[3].toInt(), r[4].toInt() };
-      //LOG_INFO << regions.values[r][0].toInt()+1 << " " << coords.xpos << " " << coords.ypos << " " << coords.width << " " << coords.height << std::endl;
       regionCoords[r[0].toInt()] = coords;
     }
     LOG_INFO << "Found" << regionCoords.size() << "regions for layout" << curLayout;
@@ -136,7 +135,7 @@ void CharTexture::burnComponent(QImage & destImage, CharTextureComponent & ct) c
 #endif
 
 #if DEBUG_TEXTURE > 1
-  newImage.save(QString("./tex__%1_%2_%3_%4_%5.png").arg(region, x, y, width, height));
+  newImage.save(QString("./tex__%1_%2_%3_%4_%5.png").arg(region).arg(x).arg(y).arg(width).arg(height));
 #endif
 
   if ((ct.region == LAYOUT_BASE_REGION 

@@ -143,8 +143,17 @@ void CharDetails::reset(WoWModel * model)
   refreshGeosets();
   refreshTextures();
 
+  // Apply only the DEFAULT customization options. Options flagged 0x20 are not
+  // part of the default appearance (they're alternate/conditional looks); applying
+  // them blindly produces a wrong result. Matches wow.export DBCharacterCustomization.
   for (const auto &c : choicesPerOptionMap_)
-    set(c.first, c.second[0]);
+  {
+    const auto fit = optionFlags_.find(c.first);
+    if (fit != optionFlags_.end() && (fit->second & 0x20))
+      continue;
+    if (!c.second.empty())
+      set(c.first, c.second[0]);
+  }
 }
 
 void CharDetails::randomise()
@@ -177,16 +186,21 @@ void CharDetails::fillCustomizationMap()
 
   // clear any previous value found
   choicesPerOptionMap_.clear();
+  optionFlags_.clear();
 
   const auto infos = model_->infos;
   if (infos.raceID == -1)
     return;
 
-  auto options = GAMEDATABASE.sqlQuery(QString("SELECT ID FROM ChrCustomizationOption WHERE ChrModelID = %1 AND ChrCustomizationID != 0 ORDER BY OrderIndex").arg(infos.ChrModelID[0]));
+  auto options = GAMEDATABASE.sqlQuery(QString("SELECT ID, Flags FROM ChrCustomizationOption WHERE ChrModelID = %1 AND ChrCustomizationID != 0 ORDER BY OrderIndex").arg(infos.ChrModelID[0]));
 
   if (options.valid)
     for (auto& option : options.values)
-      choicesPerOptionMap_[option[0].toUInt()] = {};
+    {
+      const auto id = option[0].toUInt();
+      choicesPerOptionMap_[id] = {};
+      optionFlags_[id] = option[1].toUInt();
+    }
   
   LINKED_OPTIONS_MAP_.clear();
   initLinkedOptionsMap();
@@ -354,7 +368,12 @@ std::vector<uint> CharDetails::getCustomizationChoices(const uint chrCustomizati
 
 uint CharDetails::get(uint chrCustomizationOptionID) const
 {
-  return currentCustomization_.at(chrCustomizationOptionID);
+  // Not every option is necessarily assigned a current choice (e.g. non-default
+  // options skipped during reset()). Return 0 rather than throwing -- the UI builds
+  // a control for every option and queries get() for each, so an unset option must
+  // not crash (std::map::at() would throw -> uncaught -> terminate).
+  const auto it = currentCustomization_.find(chrCustomizationOptionID);
+  return (it != currentCustomization_.end()) ? it->second : 0;
 }
 
 void CharDetails::setRandomValue(CustomizationType type)

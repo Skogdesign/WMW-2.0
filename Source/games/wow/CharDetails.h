@@ -180,6 +180,7 @@ private:
   void refreshSkinnedModels();
 
   std::map<uint, std::vector<uint> > choicesPerOptionMap_; // map < ChrCustomizationOption::ID, vector <ChrCustomizationChoice::ID> >
+  std::map<uint, uint> optionFlags_; // map < ChrCustomizationOption::ID, ChrCustomizationOption::Flags >
   std::map<uint, CustomizationElements> customizationElementsPerOption_; // keep track of current elements applied for a given option
   std::vector<std::pair<uint, std::pair<uint, uint> > > models_; // vector < pair < GameFileId, pair <GeosetType, GeosetID> > >
 

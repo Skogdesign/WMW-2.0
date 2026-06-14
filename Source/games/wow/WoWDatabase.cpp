@@ -94,6 +94,11 @@ void wow::WoWDatabase::refreshStructures(std::vector<core::TableStructure *> & t
     if (!tbl)
       continue;
 
+    // CSV-backed tables (e.g. AnimationData) read columns by order, not by DB2
+    // field position, so the WoWDBDefs refresh does not apply to them.
+    if (tbl->file.endsWith(".csv", Qt::CaseInsensitive))
+      continue;
+
     const QString dbdPath = "dbd/" + tbl->name + ".dbd";
     if (!QFile::exists(dbdPath))
       continue; // no definition available -> keep base XML positions

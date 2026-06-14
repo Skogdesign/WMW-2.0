@@ -129,6 +129,7 @@ private:
   std::map<uint32, std::string> m_relationShipData;
 
   unsigned char * m_sectionData;
+  size_t m_sectionDataSize;
   unsigned char * m_palletData;
 };
 

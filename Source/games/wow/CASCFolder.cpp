@@ -80,16 +80,21 @@ bool CASCFolder::setConfig(core::GameConfig config)
 
       addExtraEncryptionKeys();
 
+      // Trust the locale chosen from .build.info and resolve files by FileDataID
+      // (see fileExists()/openFile(), which use CASC_OPEN_BY_FILEID with this
+      // locale). Modern WoW roots (BfA+) carry no filename hashes, so opening a
+      // file BY NAME always fails even with a perfectly valid locale -- the old
+      // "Localization.lua" probe below therefore must NOT be treated as fatal.
+      m_currentCascLocale = it->second;
+
       if (CascOpenFile(hStorage, "Interface\\FrameXML\\Localization.lua", it->second, 0, &dummy))
       {
         CascCloseFile(dummy);
-        m_currentCascLocale = it->second;
-        LOG_INFO << "Locale succesfully set:" << m_currentConfig.locale;
+        LOG_INFO << "Locale set (legacy name probe ok):" << m_currentConfig.locale;
       }
       else
       {
-        LOG_ERROR << "Setting Locale" << m_currentConfig.locale << "for folder" << m_folder << "failed";
-        return false;
+        LOG_INFO << "Locale set from .build.info (name probe unavailable, normal on modern WoW):" << m_currentConfig.locale;
       }
     }
   }

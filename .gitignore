@@ -14,3 +14,6 @@ build
 
 # local build helpers (machine-specific paths)
 /_*.bat
+
+# community listfile is large (>100MB) and fetched/updated out of band
+bin_support/wow/listfile.csv

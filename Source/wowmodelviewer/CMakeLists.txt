@@ -129,6 +129,13 @@ add_executable(${NAME} WIN32 ${src} ${headers} ${RES_FILES} ${useful_files} )
 
 set_property(TARGET ${NAME} PROPERTY FOLDER "executables")
 
+# This is a 32-bit build; loading a modern WoW's ~2M-entry listfile plus the
+# in-memory database easily exceeds the default 2 GB user address space. Allow
+# the process to use up to 4 GB on 64-bit Windows.
+if(MSVC)
+  set_target_properties(${NAME} PROPERTIES LINK_FLAGS "/LARGEADDRESSAWARE")
+endif()
+
 set(BIN_DIR "${CMAKE_SOURCE_DIR}/bin/")
 
 target_link_libraries(${NAME}

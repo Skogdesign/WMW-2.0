@@ -13,6 +13,8 @@
 #include <QDomElement>
 #include <QFile>
 
+#include <exception>
+
 #include "logger/Logger.h"
 #include "Game.h"
 
@@ -106,25 +108,44 @@ bool core::GameDatabase::createDatabaseFromXML(const QString & file)
     return false;
   }
 
+  // Let the game-specific database adapt the structures to the loaded build
+  // (e.g. refresh DB2 field positions from WoWDBDefs).
+  refreshStructures(m_dbStruct);
+
   bool result = true; // ok until we found an issue
 
   for (auto it = m_dbStruct.begin(), itEnd = m_dbStruct.end(); it != itEnd; ++it)
   {
-    if ((*it)->create())
+    // Build each table defensively: a single table that fails (e.g. an
+    // unsupported layout on a newer build, or a bad alloc on a very large
+    // sparse table) must not abort the whole database or crash the app -- the
+    // other tables (and the model the user wants) can still load.
+    try
     {
-      if (!(*it)->fill() && !m_fastMode)
+      if ((*it)->create())
       {
-        LOG_ERROR << "Error during table filling" << (*it)->name;
-        result = false;
+        if (!(*it)->fill() && !m_fastMode)
+        {
+          LOG_ERROR << "Error during table filling" << (*it)->name;
+          result = false;
+        }
+      }
+      else
+      {
+        if (!m_fastMode) // if table already exists in fast mode, continue
+        {
+          LOG_ERROR << "Error during table creation" << (*it)->name;
+          result = false;
+        }
       }
     }
-    else
+    catch (const std::exception & e)
     {
-      if (!m_fastMode) // if table already exists in fast mode, continue
-      {
-        LOG_ERROR << "Error during table creation" << (*it)->name;
-        result = false;
-      }
+      LOG_ERROR << "Exception while building table" << (*it)->name << ":" << e.what() << "- skipping table";
+    }
+    catch (...)
+    {
+      LOG_ERROR << "Unknown exception while building table" << (*it)->name << "- skipping table";
     }
   }
 

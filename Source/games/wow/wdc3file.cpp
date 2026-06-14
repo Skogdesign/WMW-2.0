@@ -7,6 +7,7 @@
 #include <sstream>
 #include <bitset>
 #include <cstdint>
+#include <cstring>
 
 #include "WoWDatabase.h"
 
@@ -14,13 +15,25 @@
 #define WDC3_READ_DEBUG_FIRST_RECORDS 0
 
 WDC3File::WDC3File(const QString & file):
-WDB5File(file), m_sectionData(0), m_palletData(0)
+WDB5File(file), m_sectionData(0), m_sectionDataSize(0), m_palletData(0)
 {
 }
 
 void WDC3File::readWDC3Header()
 {
-  read(&m_header, sizeof(WDC3File::header)); // File Header
+  // Read the 4-char magic first. WDC5 (WoW 11.0+) inserts a preamble after the
+  // magic -- a uint32 schema version followed by a 128-byte build string --
+  // ahead of the otherwise WDC3-identical header. WDC2/3/4 have no preamble.
+  // The section data itself is reached via the absolute section_header.file_offset,
+  // so the WDC4/5 inter-section chunk array needs no explicit skipping here.
+  read(m_header.magic, sizeof(m_header.magic));
+
+  if (strncmp(m_header.magic, "WDC5", 4) == 0)
+    seek(sizeof(m_header.magic) + 4 + 128); // past magic + version + build string
+
+  // read the remainder of the header (everything after 'magic') contiguously
+  read(reinterpret_cast<char *>(&m_header) + sizeof(m_header.magic),
+       sizeof(WDC3File::header) - sizeof(m_header.magic));
 
 #if WDC3_READ_DEBUG > 1
   LOG_INFO << "magic" << m_header.magic[0] << m_header.magic[1] << m_header.magic[2] << m_header.magic[3];
@@ -211,6 +224,7 @@ bool WDC3File::open()
 
   seek(m_sectionHeader[0].file_offset);
   m_sectionData = new unsigned char[sectionSize];
+  m_sectionDataSize = sectionSize;
   read(m_sectionData, sectionSize);
 
   // maintain curPtr to location of the block along section reading
@@ -553,12 +567,18 @@ std::vector<std::string> WDC3File::get(unsigned int recordIndex, const core::Tab
 
       if (field->type == "text")
       {
-        char * stringPtr;
+        // All strings live inside the section buffer; keep every read bounded to
+        // it so a stale/garbage offset (e.g. a field position that shifted on a
+        // newer build) cannot walk off the heap and crash.
+        const char * bufStart = reinterpret_cast<const char *>(m_sectionData);
+        const char * bufEnd = bufStart + m_sectionDataSize;
+        char * stringPtr = nullptr;
+
         if (m_isSparseTable)
         {
           unsigned char * ptr = recordOffset;
-          // iterate along record to get right position
-          for (int f = 0; f <= field->pos; f++)
+          // walk inline strings up to this field's position
+          for (int f = 0; f <= field->pos && f < static_cast<int>(structure->fields.size()); f++)
           {
             if (structure->fields[f]->isKey)
               continue;
@@ -569,8 +589,10 @@ std::vector<std::string> WDC3File::get(unsigned int recordIndex, const core::Tab
             }
             else
             {
-              std::string Val(reinterpret_cast<char *>(ptr));
-              ptr = ptr + Val.size() + 1;
+              const char * s = reinterpret_cast<const char *>(ptr);
+              if (s < bufStart || s >= bufEnd) { ptr = nullptr; break; }
+              size_t len = strnlen(s, static_cast<size_t>(bufEnd - s));
+              ptr = ptr + len + 1;
             }
           }
           stringPtr = reinterpret_cast<char *>(ptr);
@@ -580,9 +602,18 @@ std::vector<std::string> WDC3File::get(unsigned int recordIndex, const core::Tab
           stringPtr = reinterpret_cast<char *>(recordOffset + m_fieldStorageInfo[field->pos].field_offset_bits / 8 + val - ((m_header.record_count - m_sectionHeader[0].record_count) * m_header.record_size));
         }
 
-        std::string value(stringPtr);
-        std::replace(value.begin(), value.end(), '"', '\'');
-        result.push_back(value);
+        const char * sp = reinterpret_cast<const char *>(stringPtr);
+        if (!sp || sp < bufStart || sp >= bufEnd)
+        {
+          result.push_back("");
+        }
+        else
+        {
+          size_t len = strnlen(sp, static_cast<size_t>(bufEnd - sp));
+          std::string value(sp, len);
+          std::replace(value.begin(), value.end(), '"', '\'');
+          result.push_back(value);
+        }
       }
       else if (field->type == "float")
       {
@@ -696,6 +727,15 @@ WDC3File::~WDC3File()
 
 bool WDC3File::readFieldValue(unsigned int recordIndex, unsigned int fieldIndex, uint arrayIndex, uint arraySize, unsigned int & result) const
 {
+  // Guard against stale/out-of-range field positions (e.g. a schema field whose
+  // position was not refreshed for the current build). Reading past the file's
+  // field/record arrays would otherwise corrupt memory / crash.
+  if (recordIndex >= m_recordOffsets.size() || fieldIndex >= m_fieldStorageInfo.size())
+  {
+    result = 0;
+    return false;
+  }
+
   unsigned char * recordOffset = m_recordOffsets[recordIndex];
   field_storage_info info = m_fieldStorageInfo[fieldIndex];
 

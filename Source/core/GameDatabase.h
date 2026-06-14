@@ -107,6 +107,10 @@ namespace core
     virtual void readSpecificFieldAttributes(QDomElement &, core::FieldStructure *) = 0;
 
   protected:
+    // Adjust table/field structures for the game build actually loaded, after
+    // they have been read from the base XML (e.g. refresh DB2 field positions
+    // from WoWDBDefs for a build newer than the shipped schema). Default no-op.
+    virtual void refreshStructures(std::vector<TableStructure *> &) {}
 
   private:
     static int treatQuery(void *NotUsed, int nbcols, char ** values, char ** cols);

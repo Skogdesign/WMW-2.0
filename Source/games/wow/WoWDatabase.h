@@ -68,6 +68,12 @@ namespace wow
 
       void readSpecificTableAttributes(QDomElement &, core::TableStructure *);
       void readSpecificFieldAttributes(QDomElement &, core::FieldStructure *);
+
+    protected:
+      // Refresh each table's DB2 field positions from its WoWDBDefs (.dbd)
+      // definition for the loaded build, so the curated XML names/types stay
+      // but positions track the current game version.
+      void refreshStructures(std::vector<core::TableStructure *> &) override;
   };
 
 }

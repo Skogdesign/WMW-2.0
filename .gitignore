@@ -1,0 +1,16 @@
+syntax: glob
+bin/*
+CMakeBuild/*
+Source/latex/*
+Source/html/*
+.project
+.cproject
+.settings/*
+Installers/Windows/NSIS/*.exe
+VisualStudio2013/*
+build
+.vs
+.vscode
+
+# local build helpers (machine-specific paths)
+/_*.bat

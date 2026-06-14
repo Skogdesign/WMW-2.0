@@ -1,0 +1,36 @@
+version: 0.10.0.{build}
+image: Visual Studio 2017
+
+clone_script:
+- cmd: >-
+    git clone -v --branch=develop --recursive --progress https://github.com/wowmodelviewer/wowmodelviewer.git C:\projects\wowmodelviewer
+
+before_build:
+- cmd: >-
+    cmake -B build -G "Visual Studio 15 2017" -DBUILDNUMBER=%APPVEYOR_BUILD_NUMBER%
+
+build_script:
+- cmd: >-
+    cmake --build build --config Release --target release
+    
+    cd C:\projects\wowmodelviewer\bin
+
+    ren WMV_Installer.exe WMV_Installer_v%APPVEYOR_BUILD_VERSION%.exe
+
+test: off
+
+artifacts:
+- path: bin\WMV_Installer_v%APPVEYOR_BUILD_VERSION%.exe
+
+for:
+-
+  branches:
+    only:
+      - develop
+
+  on_success:
+    - ps: Invoke-RestMethod https://raw.githubusercontent.com/DiscordHooks/appveyor-discord-webhook/master/send.ps1 -o send.ps1
+    - ps: ./send.ps1 success $env:WEBHOOK_URL
+  on_failure:
+    - ps: Invoke-RestMethod https://raw.githubusercontent.com/DiscordHooks/appveyor-discord-webhook/master/send.ps1 -o send.ps1
+    - ps: ./send.ps1 failure $env:WEBHOOK_URL

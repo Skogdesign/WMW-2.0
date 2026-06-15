@@ -17,3 +17,6 @@ build
 
 # community listfile is large (>100MB) and fetched/updated out of band
 bin_support/wow/listfile.csv
+
+# installer build output (the compiled setup.exe is large and regenerated)
+installer/dist

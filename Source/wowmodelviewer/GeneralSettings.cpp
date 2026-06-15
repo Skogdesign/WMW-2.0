@@ -33,7 +33,7 @@ END_EVENT_TABLE()
 
 GeneralSettings::GeneralSettings(wxWindow* parent, wxWindowID id)
 {
-  if (Create(parent, id, wxPoint(0,0), wxSize(400,550), 0, wxT("GeneralSettings")) == false)
+  if (Create(parent, id, wxPoint(0,0), wxSize(400,720), 0, wxT("GeneralSettings")) == false)
   {
     LOG_ERROR << "GeneralSettings";
     return;
@@ -85,11 +85,26 @@ GeneralSettings::GeneralSettings(wxWindow* parent, wxWindowID id)
   top->AddSpacer(2);
   top->Add(new wxStaticLine(this, wxID_ANY), 1, wxEXPAND);
   top->AddSpacer(2);
+  top->Add(new wxStaticText(this, wxID_ANY, _("Armory Importer"), wxDefaultPosition, wxDefaultSize, 0), 0, wxALL, 5);
+  armoryProxyURLCtrl = new wxTextCtrl(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxSize(300, -1));
+  top->Add(new wxStaticText(this, wxID_ANY, _("Proxy URL (optional)"), wxDefaultPosition, wxDefaultSize, 0), 0, wxLEFT | wxRIGHT, 5);
+  top->Add(armoryProxyURLCtrl, 0, wxALL, 5);
+  wxStaticText *armoryMsg = new wxStaticText(this, wxID_ANY,
+                                             _("Character import uses a proxy that talks to the Blizzard API for you, so you "
+                                               L"don't need any credentials. This build has a default proxy built in; leave this "
+                                               L"blank to use it. Advanced: override it with your own proxy URL "
+                                               L"(template: ...?region=%s&realm=%s&character=%s) and click Apply."),
+                                             wxDefaultPosition, wxDefaultSize, 0);
+  armoryMsg->Wrap(350);
+  top->Add(armoryMsg, 0, wxALL, 5);
+  top->AddSpacer(2);
+  top->Add(new wxStaticLine(this, wxID_ANY), 1, wxEXPAND);
+  top->AddSpacer(2);
   top->Add(new wxStaticText(this, wxID_ANY, _("Other"),  wxDefaultPosition, wxDefaultSize, 0), 0, wxALL, 5);
   top->Add(sizer, 0, wxEXPAND | wxALL, 5);
   top->AddSpacer(2);
   top->Add(new wxButton(this, ID_GENERAL_SETTINGS_APPLY, _("Apply"), wxDefaultPosition, wxDefaultSize, 0), 0, wxALL, 5);
-  top->SetMinSize(350, 550);
+  top->SetMinSize(350, 720);
   SetSizer(top);
   SetAutoLayout(true);
   Layout();
@@ -123,6 +138,7 @@ void GeneralSettings::Update()
   else
     customDirectoryPathDisplay->SetValue(customDirectoryPath);
   keepPolicyRadioBox->SetSelection(customFilesConflictPolicy);
+  armoryProxyURLCtrl->SetValue(wxString::FromUTF8(GLOBALSETTINGS.armoryProxyURL().c_str()));
   newGamePath = wxEmptyString;
   newCustomFolder = wxEmptyString;
 }
@@ -156,12 +172,26 @@ void GeneralSettings::OnButton(wxCommandEvent &event)
       settingsChanged = true;
     }
 
+    // Armory proxy URL override: applied live (no restart needed -- the importer reads
+    // it from GLOBALSETTINGS at import time) but still persisted via SaveSession.
+    const std::string newProxyURL = armoryProxyURLCtrl->GetValue().ToUTF8().data();
+    bool proxyChanged = false;
+    if (newProxyURL != GLOBALSETTINGS.armoryProxyURL())
+    {
+      GLOBALSETTINGS.setArmoryProxyURL(newProxyURL);
+      proxyChanged = true;
+    }
+
     if(settingsChanged)
     {
       wxMessageBox(wxT("Settings changed.\nYou need to restart WoW Model Viewer to take them into account"),
                    wxT("Settings Changed"), wxICON_INFORMATION);
       g_modelViewer->SaveSession();
       settingsChanged = false;
+    }
+    else if (proxyChanged)
+    {
+      g_modelViewer->SaveSession();
     }
   }
 

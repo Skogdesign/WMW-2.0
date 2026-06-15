@@ -18,6 +18,7 @@
 #include "util.h"
 #include "WoWDatabase.h"
 #include "WoWFolder.h"
+#include "WoWModel.h"
 
 #include "logger/Logger.h"
 #include "logger/LogOutputConsole.h"
@@ -101,8 +102,8 @@ bool WowModelViewApp::OnInit()
     wxImage::AddHandler(new wxPNGHandler);
     wxImage::AddHandler(new wxXPMHandler);
 
-    // Enable Randomly choosing between SPLASH and SPLASH2
-    bool randomSplash2 = true;
+    // Single Midnight splash (both SPLASH and SPLASH2 point to it); no faction RNG.
+    bool randomSplash2 = false;
 
     wxString splashname = L"SPLASH";
     if (randomSplash2 == true)
@@ -302,17 +303,8 @@ bool WowModelViewApp::OnInit()
 
   LOG_INFO << "WoW Model Viewer successfully loaded!";
 
-  // check for last version
-  if (wxExecute(L"UpdateManager.exe --no-ui", wxEXEC_SYNC) < 0)
-    if (wxMessageBox(_("A new version is available, do you want to open Update Manager now ?"), _("Update Software"), wxYES_NO) == wxYES) {
-      wxExecute(L"UpdateManager.exe", wxEXEC_SYNC);
-    }
-
-
-  // Classic Mode?
-  if (wxMessageBox(_("Would you like to load World of Warcraft right now?"), _("Load World of Warcraft"), wxYES_NO) == wxYES) {
-    frame->LoadWoW();
-  }
+  // Always load World of Warcraft on startup (no prompt).
+  frame->LoadWoW();
 
 
 
@@ -394,6 +386,11 @@ void WowModelViewApp::LoadSettings()
   ssCounter = config.value("Settings/SSCounter", 100).toInt();
   imgFormat = config.value("Settings/DefaultFormat", 1).toInt();
 
+  // Optional override for the armory importer's proxy URL (the proxy holds the
+  // Blizzard credentials server-side). Pushed into the core singleton so the Qt
+  // importer plugin can read it; empty -> the plugin uses its built-in default.
+  GLOBALSETTINGS.setArmoryProxyURL(config.value("Armory/ProxyURL", "").toString().toStdString());
+
   if (config.value("Unofficial/UseDoNotTrailInfo", false).toBool() == true)
     ParticleSystem::useDoNotTrailInfo();
 }
@@ -413,6 +410,8 @@ void WowModelViewApp::SaveSettings()
   config.setValue("Settings/displayItemAndNPCId", displayItemAndNPCId);
   config.setValue("Settings/SSCounter", ssCounter);
   config.setValue("Settings/DefaultFormat", imgFormat);
+
+  config.setValue("Armory/ProxyURL", QString::fromStdString(GLOBALSETTINGS.armoryProxyURL()));
   config.sync();
 }
 

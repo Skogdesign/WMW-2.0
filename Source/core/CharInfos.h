@@ -73,6 +73,10 @@ class _CHARINFOS_API_ CharInfos
     bool valid;
     bool customTabard;
 
+    // Human-readable reason the import failed (shown to the user when !valid).
+    // Empty -> fall back to the generic "bad link" message.
+    std::string errorMessage;
+
     unsigned int raceId;
     std::string gender;
     bool hasTransmogGear;

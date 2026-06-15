@@ -44,6 +44,7 @@ class GeneralSettings: public wxWindow
   wxCheckBox *chkbox[NUM_SETTINGS1_CHECK];
   wxTextCtrl *gamePathDisplay;
   wxTextCtrl *customDirectoryPathDisplay;
+  wxTextCtrl *armoryProxyURLCtrl;
   wxRadioBox *keepPolicyRadioBox;
   wxString newGamePath, newCustomFolder;
 public:

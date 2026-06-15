@@ -33,9 +33,13 @@
 
 // Qt
 #include <QEventLoop>
+#include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
 #include <QJsonArray>
+#include <QJsonObject>
+#include <QUrl>
+#include <QUrlQuery>
 #include <qjsondocument.h>
 #include <QtWidgets/qmessagebox.h>
 
@@ -46,6 +50,7 @@
 // Other libraries
 //#include "charcontrol.h"
 #include "CharInfos.h"
+#include "GlobalSettings.h" // Blizzard API credentials
 #include "database.h" // ItemRecord
 #include "wow_enums.h"
 
@@ -77,6 +82,33 @@ bool ArmoryImporter::acceptURL(QString url) const
 }
 
 
+// Built-in armory proxy URL baked into the build. The client holds NO Blizzard API
+// credentials; it calls a small self-hosted proxy, which performs the OAuth
+// client_credentials grant + appearance fetch server-side and returns the JSON.
+// printf-style template: 1st %s = region, 2nd = realm slug, 3rd = character name
+// (lower-cased). Empty by default -- set this to your deployed proxy (see
+// armory-proxy/README.md), or override at runtime in Settings > General.
+static const QString DEFAULT_ARMORY_PROXY_URL = "";
+
+// Substitute the first three "%s" placeholders in the proxy template, in order
+// (region, realm, character), URL-encoding each value EXACTLY ONCE. Values parsed
+// from a URL may already be percent-encoded (e.g. an accented character name like
+// "n%C3%A1tnat" from a browser-copied link), so decode first then re-encode to keep
+// encoding idempotent and avoid producing "%25C3%25A1" (which the API would 404).
+static QString fillProxyTemplate(QString tmpl, const QString & region, const QString & realm, const QString & charName)
+{
+  const QString values[3] = { region, realm, charName.toLower() };
+  for (const auto & value : values)
+  {
+    const int idx = tmpl.indexOf("%s");
+    if (idx < 0)
+      break;
+    const QString decoded = QUrl::fromPercentEncoding(value.toUtf8());
+    tmpl.replace(idx, 2, QString::fromUtf8(QUrl::toPercentEncoding(decoded)));
+  }
+  return tmpl;
+}
+
 CharSlots armorySlotToCharSlot(const int slot)
 {
   if (slot == 0)
@@ -106,7 +138,10 @@ CharSlots armorySlotToCharSlot(const int slot)
   if (slot == 18)
     return CS_TABARD;
 
-  return {};
+  // Unmapped slots (neck, rings, trinkets, ranged) aren't worn on the model.
+  // Return an out-of-range sentinel so the caller skips them -- returning {} would
+  // be CS_HEAD (0) and clobber the head item.
+  return NUM_CHAR_SLOTS;
 }
 
 CharInfos * ArmoryImporter::importChar(QString url) const
@@ -129,7 +164,9 @@ CharInfos * ArmoryImporter::importChar(QString url) const
     auto obj = root.value("playable_race").toObject();
     result->raceId = obj.value("id").toInt();
     obj = root.value("gender").toObject();
-    result->gender = obj.value("name").toString().toStdString();
+    // Use the locale-independent gender "type" ("MALE"/"FEMALE"); the caller compares
+    // result->gender against the English "Male" to pick the model sex.
+    result->gender = (obj.value("type").toString() == "MALE") ? "Male" : "Female";
 
     // Gather character customizations
     const auto customizations = root.value("customizations").toArray();
@@ -148,13 +185,15 @@ CharInfos * ArmoryImporter::importChar(QString url) const
     for (const auto& item : Items)
     {
       const auto slot = armorySlotToCharSlot(item["internal_slot_id"].toInt());
+      if (slot >= NUM_CHAR_SLOTS) // unmapped slot (neck/ring/trinket/ranged) -- not worn
+        continue;
       result->equipment[slot] = item["id"].toInt();
       result->itemModifierIds[slot] = item["item_appearance_modifier_id"].toInt();
     }
 
    
-    // Set proper eyeglow
-    if (root.value("class").toInt() == 6) // 6 = DEATH KNIGHT
+    // Set proper eyeglow. The appearance API nests the class id under "playable_class".
+    if (root.value("playable_class").toObject().value("id").toInt() == 6) // 6 = DEATH KNIGHT
       result->eyeGlowType = EGT_DEATHKNIGHT;
     else
       result->eyeGlowType = EGT_DEFAULT;
@@ -178,8 +217,22 @@ CharInfos * ArmoryImporter::importChar(QString url) const
   }
   else {
     LOG_ERROR << "Bad JSON Results:" << readStatus << "Root Size:" << root.count();
+    // Map the gather status to an actionable message for the user.
+    if (readStatus == 4)
+      result->errorMessage = "No Armory proxy is configured.\n\n"
+                             "This build has no built-in proxy URL. Set one in Settings > General "
+                             "(Armory Proxy URL), or rebuild with a default proxy. See armory-proxy/README.md.";
+    else if (readStatus == 6)
+      result->errorMessage = "Could not read the character link.\n\n"
+                             "Use a link like https://worldofwarcraft.blizzard.com/en-gb/character/eu/realm/name";
+    else if (readStatus == 7)
+      result->errorMessage = "Unsupported region.\n\nOnly the US, EU, KR and TW regions are supported.";
+    else
+      result->errorMessage = "Could not retrieve character data from the Armory.\n\n"
+                             "Check the region/realm/name in the link, that the character profile "
+                             "is not private, and that the Armory proxy URL (Settings > General) is reachable.";
   }
-  
+
   return result;
 }
 
@@ -258,7 +311,7 @@ This will give us all the information we need inside of a JSON array.
     "key": {
       "href": "https://eu.api.blizzard.com/data/wow/playable-class/9?namespace=static-9.0.1_36072-eu"
     },
-    "name": "Démoniste",
+    "name": "Dï¿½moniste",
     "id": 9
   },
   "active_spec": {
@@ -330,7 +383,7 @@ This will give us all the information we need inside of a JSON array.
       "id": 132394,
       "slot": {
         "type": "HEAD",
-        "name": "Tête"
+        "name": "Tï¿½te"
       },
       "enchant": 0,
       "item_appearance_modifier_id": 0,
@@ -341,7 +394,7 @@ This will give us all the information we need inside of a JSON array.
       "id": 134309,
       "slot": {
         "type": "SHOULDER",
-        "name": "Épaules"
+        "name": "ï¿½paules"
       },
       "enchant": 0,
       "item_appearance_modifier_id": 0,
@@ -503,11 +556,11 @@ This will give us all the information we need inside of a JSON array.
     },
     {
       "option": {
-        "name": "Détails de la mâchoire",
+        "name": "Dï¿½tails de la mï¿½choire",
         "id": 62
       },
       "choice": {
-        "name": "Joues nécrosées",
+        "name": "Joues nï¿½crosï¿½es",
         "id": 979,
         "display_order": 9
       }
@@ -524,7 +577,7 @@ This will give us all the information we need inside of a JSON array.
     },
     {
       "option": {
-        "name": "Détails du visage",
+        "name": "Dï¿½tails du visage",
         "id": 563
       },
       "choice": {
@@ -598,7 +651,10 @@ As you can see, this will give us almost all the data we need to properly rebuil
           region = strList.at(1);
 
         realm = strList.at(strList.size() - 2);
-        charName = strList.at(strList.size() - 1).mid(0, strUrl.lastIndexOf("?") - 1);
+        charName = strList.at(strList.size() - 1);
+        const int q = charName.indexOf('?'); // strip any trailing query string
+        if (q >= 0)
+          charName = charName.left(q);
         LOG_INFO << "WoW.com, CharName:" << charName << "Realm:" << realm << "Region:" << region;
         
         // I don't believe these should be translated, as websites tend not to translate URLs...
@@ -620,11 +676,42 @@ As you can see, this will give us almost all the data we need to properly rebuil
         return 2;
       }
 
-      LOG_INFO << "Loading Battle.Net Armory. Region:" << qPrintable(region)
+      // Reject an unparsed link, or a region the proxy doesn't support (retail
+      // us/eu/kr/tw; the proxy maps classic-* itself), with a clear message rather
+      // than firing a request guaranteed to fail.
+      {
+        const QString baseRegion = region.startsWith("classic-") ? region.mid(8) : region;
+        if (region.isEmpty() || realm.isEmpty() || charName.isEmpty())
+        {
+          LOG_ERROR << "Armory: could not parse the character link (region/realm/name).";
+          return 6;
+        }
+        if (baseRegion != "us" && baseRegion != "eu" && baseRegion != "kr" && baseRegion != "tw")
+        {
+          LOG_ERROR << "Armory: unsupported region" << qPrintable(region) << "(expected us/eu/kr/tw).";
+          return 7;
+        }
+      }
+
+      LOG_INFO << "Loading Blizzard Armory. Region:" << qPrintable(region)
         << ", Realm:" << qPrintable(realm)
         << ", Character:" << qPrintable(charName);
 
-      apiPage = QString("https://wowmodelviewer.net/armory2.php?region=%1&realm=%2&char=%3").arg(region).arg(realm).arg(charName);
+      // The old wowmodelviewer.net/armory2.php proxy is gone. We call a self-hosted
+      // proxy that holds the Blizzard API credentials server-side, does the OAuth +
+      // appearance fetch, and returns the JSON the parser below already understands.
+      // Runtime override (Settings > General) wins over the built-in default.
+      QString proxyTemplate = QString::fromStdString(GLOBALSETTINGS.armoryProxyURL());
+      if (proxyTemplate.isEmpty())
+        proxyTemplate = DEFAULT_ARMORY_PROXY_URL;
+
+      if (proxyTemplate.isEmpty())
+      {
+        LOG_ERROR << "Armory import: no proxy URL configured (build-in default empty and none set in Settings > General).";
+        return 4; // no proxy -- importChar reports an actionable error
+      }
+
+      apiPage = fillProxyTemplate(proxyTemplate, region, realm, charName);
       break;
     }
     case ITEM:
@@ -654,8 +741,13 @@ As you can see, this will give us almost all the data we need to properly rebuil
   LOG_INFO << "Final API Page:" << qPrintable(apiPage);
 
   const auto bts = getURLData(apiPage);
-  LOG_INFO << bts;
+  LOG_INFO << "Armory response (" << bts.size() << " bytes):" << bts;
   result = QJsonDocument::fromJson(bts).object();
+  if (result.isEmpty())
+  {
+    LOG_ERROR << "Armory: empty/invalid JSON from the proxy. Check the proxy URL, the region/realm/name, and that the character profile is not private.";
+    return 5;
+  }
   return 0;
 }
 
@@ -672,12 +764,9 @@ QByteArray ArmoryImporter::getURLData(const QString & inputUrl) const
   QNetworkAccessManager manager;
   QNetworkRequest request(url);
   request.setRawHeader("User-Agent", "WoWModelViewer");
-
-  // disable ssl handshake (error when communicating with server as certifcate is self signed)
-  auto sslConfiguration = request.sslConfiguration();
-  sslConfiguration.setProtocol(QSsl::AnyProtocol);
-  sslConfiguration.setPeerVerifyMode(QSslSocket::QueryPeer);
-  request.setSslConfiguration(sslConfiguration);
+  // The proxy is a normal, publicly-trusted HTTPS endpoint, so keep Qt's default
+  // certificate verification (VerifyPeer) -- it authenticates the proxy and prevents
+  // an on-path attacker from feeding us forged character data.
   auto *response = manager.get(request);
   QEventLoop eventLoop;
   connect(response, SIGNAL(finished()), &eventLoop, SLOT(quit()));
@@ -690,7 +779,6 @@ QByteArray ArmoryImporter::getURLData(const QString & inputUrl) const
 
   return htmldata;
 }
-
 bool ArmoryImporter::hasMember(const QJsonValueRef & check, const QString & lookfor)
 {
   if (check.toObject().find(lookfor) != check.toObject().end())

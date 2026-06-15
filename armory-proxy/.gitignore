@@ -1,0 +1,5 @@
+# Never commit the Blizzard client secret.
+config.php
+.dev.vars
+wrangler.toml
+.wrangler/

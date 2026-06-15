@@ -163,7 +163,6 @@ EVT_MENU(ID_MOUNT_CHARACTER, ModelViewer::OnMount)
 EVT_MENU(ID_CHAR_RANDOMISE, ModelViewer::OnSetEquipment)
 
 // About menu
-EVT_MENU(ID_CHECKFORUPDATE, ModelViewer::OnCheckForUpdate)
 EVT_MENU(ID_LANGUAGE, ModelViewer::OnLanguage)
 EVT_MENU(ID_HELP, ModelViewer::OnAbout)
 EVT_MENU(ID_ABOUT, ModelViewer::OnAbout)
@@ -512,8 +511,6 @@ void ModelViewer::InitMenu()
     aboutMenu->Append(ID_HELP, _("Help"));
     aboutMenu->Enable(ID_HELP, false);
     aboutMenu->Append(ID_ABOUT, _("About"));
-    aboutMenu->AppendSeparator();
-    aboutMenu->Append(ID_CHECKFORUPDATE, _("Check for Update"));
 
     menuBar = new wxMenuBar();
     menuBar->Append(fileMenu, _("&File"));
@@ -848,6 +845,9 @@ void ModelViewer::SaveSession()
   config.setValue("Session/ShowParticle", GLOBALSETTINGS.bShowParticle);
   config.setValue("Session/ZeroParticle", GLOBALSETTINGS.bZeroParticle);
   config.setValue("Session/InitPoseOnlyExport", GLOBALSETTINGS.bInitPoseOnlyExport);
+
+  // Armory importer proxy URL override (entered in General Settings).
+  config.setValue("Armory/ProxyURL", QString::fromStdString(GLOBALSETTINGS.armoryProxyURL()));
 
   // Background and Custom Colours
   wxColour bgCol;
@@ -1749,20 +1749,73 @@ void ModelViewer::LoadWoW()
 
   if (nbConfigs > 1)
   {
-    wxString * availableConfigs = new wxString[nbConfigs];
-    for (size_t i = 0; i < nbConfigs; i++)
-    {
-      QString label = configsFound[i].locale + " - " + configsFound[i].product;
-      if (configsFound[i].version != "")
-        label = label + " (" + configsFound[i].version + ")";
-      availableConfigs[i] = wxString(label.toStdWString().c_str());
-    }
+    // Decide whether we actually need to ask the user. If every config is for the
+    // same locale (e.g. .build.info lists several builds of one install, like
+    // 12.0.5 and 12.0.1 enUS), there is no real choice to make -- auto-pick the
+    // newest build (preferring the retail "wow" product) and skip the prompt. This
+    // avoids a locale dialog on every (now automatic) startup, and lets the
+    // headless snapshot CLI load without blocking on a modal dialog.
+    bool singleLocale = true;
+    for (size_t i = 1; i < nbConfigs; i++)
+      if (configsFound[i].locale != configsFound[0].locale)
+      {
+        singleLocale = false;
+        break;
+      }
 
-    long id = wxGetSingleChoiceIndex(_("Please select a locale:"), _("Locale"), nbConfigs, availableConfigs);
-    if (id != -1)
-      config = configsFound[id];
+    if (singleLocale)
+    {
+      // numeric, component-wise "is a newer than b" on dotted versions ("12.0.5.67823")
+      auto isNewer = [](const QString & a, const QString & b) {
+        const QStringList va = a.split('.');
+        const QStringList vb = b.split('.');
+        const int n = (va.size() > vb.size()) ? va.size() : vb.size();
+        for (int i = 0; i < n; i++)
+        {
+          const long long na = (i < va.size()) ? va[i].toLongLong() : 0;
+          const long long nb = (i < vb.size()) ? vb[i].toLongLong() : 0;
+          if (na != nb)
+            return na > nb;
+        }
+        return false;
+      };
+
+      size_t best = 0;
+      for (size_t i = 1; i < nbConfigs; i++)
+      {
+        const bool bestIsRetail = (configsFound[best].product == "wow");
+        const bool iIsRetail = (configsFound[i].product == "wow");
+        if (iIsRetail != bestIsRetail)
+        {
+          if (iIsRetail)
+            best = i;                       // prefer the retail "wow" product
+        }
+        else if (isNewer(configsFound[i].version, configsFound[best].version))
+        {
+          best = i;                         // otherwise prefer the newest build
+        }
+      }
+      config = configsFound[best];
+      LOG_INFO << "Auto-selected WoW config:" << config.locale << config.product << config.version;
+    }
     else
-      return;
+    {
+      wxString * availableConfigs = new wxString[nbConfigs];
+      for (size_t i = 0; i < nbConfigs; i++)
+      {
+        QString label = configsFound[i].locale + " - " + configsFound[i].product;
+        if (configsFound[i].version != "")
+          label = label + " (" + configsFound[i].version + ")";
+        availableConfigs[i] = wxString(label.toStdWString().c_str());
+      }
+
+      long id = wxGetSingleChoiceIndex(_("Please select a locale:"), _("Locale"), nbConfigs, availableConfigs);
+      delete[] availableConfigs;
+      if (id != -1)
+        config = configsFound[id];
+      else
+        return;
+    }
   }
 
   if (!GAMEDIRECTORY.setConfig(config))
@@ -2325,11 +2378,6 @@ void ModelViewer::OnAbout(wxCommandEvent &event)
   wxAboutBox(info);
 }
 
-void ModelViewer::OnCheckForUpdate(wxCommandEvent &event)
-{
-  wxExecute(L"UpdateManager.exe", wxEXEC_SYNC);
-}
-
 void ModelViewer::OnCanvasSize(wxCommandEvent &event)
 {
   switch (event.GetId())
@@ -2454,7 +2502,11 @@ void ModelViewer::ImportArmoury(wxString strURL)
   {
     if (!result->valid)
     {
-      wxMessageBox(wxT("Improperly Formatted URL.\nMake sure your link ends with /simple or /advanced and does not contains any special character."), wxT("Bad Armory Link"));
+      const wxString msg = result->errorMessage.empty()
+        ? wxString(wxT("Improperly Formatted URL.\nMake sure the link points to a character page (e.g. https://worldofwarcraft.blizzard.com/en-gb/character/eu/realm/name)."))
+        : wxString::FromUTF8(result->errorMessage.c_str());
+      wxMessageBox(msg, wxT("Armory Import Failed"));
+      delete result;
       return;
     }
 

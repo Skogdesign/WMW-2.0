@@ -51,9 +51,31 @@ void core::GameFolder::getFilteredFiles(std::set<GameFile *> &dest, QString & fi
     LOG_ERROR << regex.errorString();
     return;
   }
+
+  // Fast extension pre-filter: every filter built by the file/anim controls ends in
+  // a literal "\.<ext>" (e.g. "^.*human.*\.m2"). The listfile has ~1M entries but
+  // only a fraction share the requested extension, so an endsWith() check lets us
+  // skip the (comparatively expensive) regex match for the vast majority of files.
+  // This is semantically identical -- the regex requires that extension anyway.
+  QString ext;
+  const int dotIdx = filter.lastIndexOf("\\.");
+  if (dotIdx >= 0)
+  {
+    const QString tail = filter.mid(dotIdx + 2);
+    // only use the pre-filter when the tail is a plain extension (letters/digits),
+    // i.e. it carries no further regex metacharacters.
+    static const QRegularExpression plainExt("^[A-Za-z0-9]+$");
+    if (plainExt.match(tail).hasMatch())
+      ext = "." + tail;
+  }
+  const Qt::CaseSensitivity cs = filter.contains("(?i)") ? Qt::CaseInsensitive : Qt::CaseSensitive;
+
   for(GameFolder::iterator it = begin() ; it != end() ; ++it)
   {
-    if((*it)->name().contains(regex))
+    const QString & n = (*it)->name();
+    if (!ext.isEmpty() && !n.endsWith(ext, cs))
+      continue;
+    if(n.contains(regex))
     {
       dest.insert(*it);
     }

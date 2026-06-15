@@ -27,12 +27,26 @@ class _RACEINFOS_API_ RaceInfos
     bool barefeet;
     std::string prefix;
     std::string clientFileString; // lowercased ChrRaces.ClientFileString, e.g. "bloodelf"
+    std::string nameLang;         // ChrRaces.Name_lang display name, e.g. "Blood Elf"
+    bool isNPC = false;           // ChrRaces.Flags & 1 (except races 23/75) -> NPC-only race
     int modelFallbackRaceID;
     int modelFallbackSexID;
     int textureFallbackRaceID;
     int textureFallbackSexID;
     std::vector<int> ChrModelID;
-   
+
+    // One row per race for the UI race browser (Playable vs NPC), built from the
+    // ChrRaces data; maps each race to its male/female model FileDataID.
+    struct RaceMenuEntry
+    {
+      int raceID = -1;
+      std::string name;       // display name (Name_lang, falls back to clientFileString)
+      bool isNPC = false;
+      int maleFileID = -1;    // model FileDataID, -1 if none
+      int femaleFileID = -1;
+    };
+    static std::vector<RaceMenuEntry> getRaceMenu(); // sorted by display name
+
     static void init();
     static int getHDModelForFileID(int);
     static bool getRaceInfosForFileID(int, RaceInfos &);

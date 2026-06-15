@@ -153,6 +153,10 @@ public:
   {
     if (seq>-1)
       anim = 0;
+    // data[]/times[] are fixed-size arrays of MAX_ANIMATED; a model with more animation
+    // sequences than that (or a bogus index) must not run off the end.
+    if (anim < 0 || anim >= MAX_ANIMATED)
+      return false;
     return ((data[anim].size()) > 0);
   }
 
@@ -163,12 +167,14 @@ public:
       // TODO
       if (!globals[seq])
         return T();
-      if (globals[seq]==0) 
+      if (globals[seq]==0)
         time = 0;
-      else 
+      else
         time = globalTime % globals[seq];
       anim = 0;
     }
+    if (anim < 0 || anim >= MAX_ANIMATED)
+      return T();
     if (data[anim].size()>1 && times[anim].size()>1) {
       size_t t1, t2;
       size_t pos=0;
@@ -244,16 +250,23 @@ public:
     if( b.nTimes == 0 )
       return;
 
-    for(size_t j=0; j < b.nTimes; j++) {
+    // times[]/data[]/in[]/out[] are fixed C arrays of MAX_ANIMATED vectors, indexed by
+    // the animation-sequence index j. A model whose track declares more sequences than
+    // MAX_ANIMATED would otherwise push_back into vectors PAST the end of the array,
+    // corrupting whatever heap object follows this Animated<> (a classic 0xC0000374 /
+    // delayed access-violation source). Cap the per-track sequence count.
+    const size_t nAnim = (b.nTimes > MAX_ANIMATED) ? (size_t)MAX_ANIMATED : (size_t)b.nTimes;
+
+    for(size_t j=0; j < nAnim; j++) {
       AnimationBlockHeader* pHeadTimes = (AnimationBlockHeader*)(f->getBuffer() + b.ofsTimes + j*sizeof(AnimationBlockHeader));
-    
+
       unsigned int *ptimes = (unsigned int*)(f->getBuffer() + pHeadTimes->ofsEntrys);
       for (size_t i=0; i < pHeadTimes->nEntrys; i++)
         times[j].push_back(ptimes[i]);
     }
 
     // keyframes
-    for(size_t j=0; j < b.nKeys; j++) {
+    for(size_t j=0; j < nAnim; j++) {
       AnimationBlockHeader* pHeadKeys = (AnimationBlockHeader*)(f->getBuffer() + b.ofsKeys + j*sizeof(AnimationBlockHeader));
 
       D *keys = (D*)(f->getBuffer() + pHeadKeys->ofsEntrys);
@@ -296,7 +309,11 @@ public:
     if( b.nTimes == 0 )
       return;
 
-    for(size_t j=0; j < b.nTimes; j++) 
+    // See the other init() overload: cap the per-track sequence count so push_back never
+    // runs past the fixed-size times[]/data[]/in[]/out[] arrays (heap corruption).
+    const size_t nAnim = (b.nTimes > MAX_ANIMATED) ? (size_t)MAX_ANIMATED : (size_t)b.nTimes;
+
+    for(size_t j=0; j < nAnim; j++)
     {
       uint32 *ptimes;
       AnimationBlockHeader* pHeadTimes;
@@ -324,7 +341,7 @@ public:
     }
 
     // keyframes
-    for(size_t j=0; j < b.nKeys; j++) 
+    for(size_t j=0; j < nAnim; j++)
     {
       D *keys;
       AnimationBlockHeader* pHeadKeys;

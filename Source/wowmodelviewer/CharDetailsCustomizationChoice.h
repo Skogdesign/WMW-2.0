@@ -12,7 +12,7 @@
   #include <wx/wx.h>
 #endif
 
-#include <wx/choice.h>
+#include <wx/bmpcbox.h>
 #include <wx/window.h>
 
 #include "CharDetails.h"
@@ -42,7 +42,7 @@ class CharDetailsCustomizationChoice : public wxWindow, public Observer
     CharDetails & details_;
     
 
-    wxChoice * choice_;
+    wxBitmapComboBox * choice_;
 };
 
 

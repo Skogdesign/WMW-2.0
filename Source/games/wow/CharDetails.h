@@ -137,10 +137,16 @@ public:
   void set(uint chrCustomizationOptionID, uint chrCustomizationChoiceID); 
   std::vector<uint> getCustomizationChoices(const uint chrCustomizationOptionID);
  
-  void setDemonHunterMode(bool val) { isDemonHunter_ = val; }
+  void setDemonHunterMode(bool val);
   bool isDemonHunter() const { return isDemonHunter_; }
 
   void refresh();
+
+  // Selective application of customization-choice geosets to the model:
+  // for each active option, show the active choice's geoset(s) and hide the
+  // other choices' geoset(s); geosets not referenced by a choice keep their
+  // default visibility. Call after the default geoset rule, before equipment.
+  void applyCustomizationGeosets();
 
 private:
 
@@ -181,6 +187,26 @@ private:
 
   std::map<uint, std::vector<uint> > choicesPerOptionMap_; // map < ChrCustomizationOption::ID, vector <ChrCustomizationChoice::ID> >
   std::map<uint, uint> optionFlags_; // map < ChrCustomizationOption::ID, ChrCustomizationOption::Flags >
+
+  // ChrCustomizationChoice::ID -> its geoset elements: each is
+  // { geosetId (GeosetType*100 + GeosetID), RelatedChrCustomizationChoiceID }.
+  // A choice can carry several geoset elements, each gated by a related choice
+  // (0 = unconditional). Resolved + cached from ChrCustomizationElement.
+  std::map<uint, std::vector<std::pair<int, uint> > > choiceGeosetElements_;
+  const std::vector<std::pair<int, uint> > & getChoiceGeosetElements(uint chrCustomizationChoiceID);
+
+  // ChrCustomizationChoice::ID -> { ClassMask, RaceMask } from ChrCustomizationReq.
+  // Used to hide class/race-gated choices (e.g. Demon-Hunter-only horns/blindfold
+  // on a non-DH character). A choice absent from the map has no requirement.
+  std::map<uint, std::pair<long long, long long> > choiceReq_;
+  bool isChoiceAvailable(uint chrCustomizationChoiceID) const;
+
+  // When a choice adds a skinned model whose texture comes from a direct-bind material
+  // gated by another option (e.g. the DH blindfold texture is gated by the DH eye-glow
+  // colour), switch that gating option to a compatible value so the model isn't merged
+  // untextured (white). Mirrors the in-game texture-gating behaviour.
+  void autoSelectTextureGating(uint chrCustomizationChoiceID);
+  bool autoSelectInProgress_ = false;
   std::map<uint, CustomizationElements> customizationElementsPerOption_; // keep track of current elements applied for a given option
   std::vector<std::pair<uint, std::pair<uint, uint> > > models_; // vector < pair < GameFileId, pair <GeosetType, GeosetID> > >
 

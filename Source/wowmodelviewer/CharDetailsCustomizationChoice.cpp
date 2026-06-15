@@ -7,6 +7,8 @@
 
 #include "CharDetailsCustomizationChoice.h"
 
+#include <wx/dcmemory.h>
+
 #include "CharDetails.h"
 #include "CharDetailsEvent.h"
 #include "Game.h"
@@ -16,8 +18,46 @@
 IMPLEMENT_CLASS(CharDetailsCustomizationChoice, wxWindow)
 
 BEGIN_EVENT_TABLE(CharDetailsCustomizationChoice, wxWindow)
-  EVT_CHOICE(wxID_ANY, CharDetailsCustomizationChoice::onChoice)
+  EVT_COMBOBOX(wxID_ANY, CharDetailsCustomizationChoice::onChoice)
 END_EVENT_TABLE()
+
+namespace
+{
+  // ChrCustomizationChoice.SwatchColor is packed 0xAARRGGBB (ARGB)
+  // Build a small swatch bitmap: single fill, a left/right
+  // split for dual-colour choices, or a crossed-out box for "no colour".
+  wxBitmap makeSwatchBitmap(unsigned int c0, unsigned int c1)
+  {
+    const int w = 38, h = 14;
+    wxBitmap bmp(w, h);
+    wxMemoryDC dc(bmp);
+    auto toCol = [](unsigned int c) { return wxColour((c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF); };
+
+    if (c0 == 0 && c1 == 0) // "none"
+    {
+      dc.SetBackground(*wxWHITE_BRUSH);
+      dc.Clear();
+      dc.SetPen(*wxGREY_PEN);
+      dc.DrawLine(0, h - 1, w, 0);
+    }
+    else if (c1 != 0) // dual colour
+    {
+      dc.SetPen(*wxTRANSPARENT_PEN);
+      dc.SetBrush(wxBrush(toCol(c0)));
+      dc.DrawRectangle(0, 0, w / 2, h);
+      dc.SetBrush(wxBrush(toCol(c1)));
+      dc.DrawRectangle(w / 2, 0, w - w / 2, h);
+    }
+    else // single colour
+    {
+      dc.SetBackground(wxBrush(toCol(c0)));
+      dc.Clear();
+    }
+
+    dc.SelectObject(wxNullBitmap);
+    return bmp;
+  }
+}
 
 
 CharDetailsCustomizationChoice::CharDetailsCustomizationChoice(wxWindow* parent, CharDetails & details, uint chrCustomizationChoiceID)
@@ -35,7 +75,7 @@ CharDetailsCustomizationChoice::CharDetailsCustomizationChoice(wxWindow* parent,
     top->Add(new wxStaticText(this, wxID_ANY, option.values[0][0].toStdWString()),
       wxSizerFlags().Align(wxALIGN_RIGHT | wxALIGN_CENTER_VERTICAL).Border(wxRIGHT, 5));
 
-    choice_ = new wxChoice(this, wxID_ANY);
+    choice_ = new wxBitmapComboBox(this, wxID_ANY, wxEmptyString, wxDefaultPosition, wxDefaultSize, 0, NULL, wxCB_READONLY);
 
     top->Add(choice_, wxSizerFlags().Align(wxALIGN_CENTER | wxALIGN_CENTER_VERTICAL).Border(wxRIGHT, 5));
 
@@ -81,7 +121,7 @@ void CharDetailsCustomizationChoice::buildList()
     if (ids.empty())
       return;
 
-    auto query = QString("SELECT OrderIndex,Name_Lang,ID FROM ChrCustomizationChoice WHERE ID IN (");
+    auto query = QString("SELECT OrderIndex,Name_Lang,ID,SwatchColor1,SwatchColor2 FROM ChrCustomizationChoice WHERE ID IN (");
     for(auto id:ids)
     {
       query += QString::number(id);
@@ -97,12 +137,35 @@ void CharDetailsCustomizationChoice::buildList()
 
     if(choices.valid && !choices.values.empty())
     {
+      // colour options (Skin/Hair/Eye Colour ...) carry a SwatchColor on their
+      // choices; show those as colour swatches instead of
+      // the meaningless "Choice N" text.
+      bool isColourOption = false;
+      for (auto v : choices.values)
+        if (v[3].toLongLong() != 0 || v[4].toLongLong() != 0) { isColourOption = true; break; }
+
       for(auto v:choices.values)
       {
-        if(!v[1].isEmpty())
-          choice_->Append(wxString(v[1].toStdString().c_str(), wxConvUTF8));
+        const wxString num = wxString::Format(wxT("%i"), v[0].toInt()); // OrderIndex, shown as a plain number
+
+        if (isColourOption)
+        {
+          // colour swatch + its number, so colours stay referenceable
+          const unsigned int c0 = static_cast<unsigned int>(v[3].toLongLong());
+          const unsigned int c1 = static_cast<unsigned int>(v[4].toLongLong());
+          // On a colour option, an UNNAMED choice with no swatch isn't a real colour --
+          // it's a class/transmog eye-glow or other conditional entry (e.g. the Death
+          // Knight eye glow that showed up as Eye Colour "18" on a Blood Elf). Skip those
+          // so the colour picker only lists actual colours. A swatch-less choice that
+          // does have a name (the "None" entry) is legitimate and is kept.
+          if (c0 == 0 && c1 == 0 && v[1].isEmpty())
+            continue;
+          choice_->Append(num, makeSwatchBitmap(c0, c1));
+        }
+        else if(!v[1].isEmpty())
+          choice_->Append(wxString(v[1].toStdString().c_str(), wxConvUTF8)); // named choice
         else
-          choice_->Append(wxString::Format(wxT(" %i "), v[0].toInt()));
+          choice_->Append(num); // unnamed, non-colour choice -> just the number
 
         values_.push_back(v[2].toUInt());
       }

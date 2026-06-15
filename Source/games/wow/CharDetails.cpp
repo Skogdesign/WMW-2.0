@@ -16,6 +16,8 @@
 #include <QFile>
 #include <QXmlStreamReader>
 
+#include <set>
+
 std::multimap<uint, int> CharDetails::LINKED_OPTIONS_MAP_ = {
   // hardcoded values (need to figure out how to find this from DB - if possible ?)
   {726, 724}, // veins color linked to veins for BE male
@@ -143,40 +145,75 @@ void CharDetails::reset(WoWModel * model)
   refreshGeosets();
   refreshTextures();
 
-  // Apply only the DEFAULT customization options. Options flagged 0x20 are not
-  // part of the default appearance (they're alternate/conditional looks); applying
-  // them blindly produces a wrong result. Matches wow.export DBCharacterCustomization.
+  // Apply a default choice to EVERY customization option, like the WoW client
+  // does when first creating a character. We must not skip options flagged 0x20:
+  // those include things like female-undead "Jaw Features", and skipping them
+  // leaves the jaw geoset unselected -> a visibly missing jaw. (the game client only
+  // auto-defaults non-0x20 options, which is exactly why it shows the same bug
+  // unless a saved appearance is imported.)
   for (const auto &c : choicesPerOptionMap_)
   {
-    const auto fit = optionFlags_.find(c.first);
-    if (fit != optionFlags_.end() && (fit->second & 0x20))
-      continue;
-    if (!c.second.empty())
-      set(c.first, c.second[0]);
+    // pick the first choice whose requirement is satisfied for this character so
+    // class-gated choices (Demon-Hunter horns/blindfold/tattoos on a non-DH, etc.)
+    // are not applied by default.
+    for (const uint choiceID : c.second)
+    {
+      if (isChoiceAvailable(choiceID))
+      {
+        set(c.first, choiceID);
+        break;
+      }
+    }
   }
 }
 
 void CharDetails::randomise()
 {
-  // TODO repair randomise
-  reset();
-  /*
-  // Choose random values for the looks! ^_^
-  setRandomValue(SKIN_COLOR);
-  setRandomValue(FACE);
-  setRandomValue(FACIAL_CUSTOMIZATION_STYLE);
-  setRandomValue(FACIAL_CUSTOMIZATION_COLOR);
-  setRandomValue(ADDITIONAL_FACIAL_CUSTOMIZATION);
-
-  // Don't worry about Custom 1-3 for elves, unless they're Demon Hunters:
-  if(isDemonHunter_)
+  // Pick a random AVAILABLE choice for every customization option. isChoiceAvailable
+  // keeps the result valid for this character (e.g. a non-Demon-Hunter never
+  // randomises into DH-only horns/blindfold). set() applies each choice + refreshes.
+  for (const auto & c : choicesPerOptionMap_)
   {
-    setRandomValue(CUSTOM1_STYLE);
-    setRandomValue(CUSTOM1_COLOR);
-    setRandomValue(CUSTOM2_STYLE);
-    setRandomValue(CUSTOM3_STYLE);
+    std::vector<uint> avail;
+    for (const uint choiceID : c.second)
+      if (isChoiceAvailable(choiceID))
+        avail.push_back(choiceID);
+
+    if (!avail.empty())
+      set(c.first, avail[randint(0, static_cast<int>(avail.size()) - 1)]);
   }
-  */
+}
+
+void CharDetails::setDemonHunterMode(bool val)
+{
+  if (val == isDemonHunter_)
+    return;
+  isDemonHunter_ = val;
+  if (!model_)
+    return;
+
+  // Toggling DH mode only changes which choices isChoiceAvailable() permits, but
+  // availability alone applies nothing: the DH horns/blindfold collection models,
+  // geosets and textures only enter customizationElementsPerOption_ when set()
+  // runs for the option. So re-resolve every option and APPLY it via set() --
+  // keep the user's current choice when it is still available, otherwise fall
+  // back to the first available one. set() also repopulates the merged skinned
+  // models, so DH looks attach (on) and detach (off) correctly.
+  for (const auto & c : choicesPerOptionMap_)
+  {
+    uint chosen = 0;
+    const uint cur = get(c.first);
+    if (cur != 0 && isChoiceAvailable(cur))
+      chosen = cur;
+    else
+      for (const uint choiceID : c.second)
+        if (isChoiceAvailable(choiceID)) { chosen = choiceID; break; }
+
+    if (chosen != 0)
+      set(c.first, chosen);                            // repopulates elements + refreshes
+    else
+      customizationElementsPerOption_.erase(c.first);  // no available choice: drop stale DH elements
+  }
 }
 
 void CharDetails::fillCustomizationMap()
@@ -187,12 +224,23 @@ void CharDetails::fillCustomizationMap()
   // clear any previous value found
   choicesPerOptionMap_.clear();
   optionFlags_.clear();
+  choiceGeosetElements_.clear();
+  choiceReq_.clear();
 
   const auto infos = model_->infos;
   if (infos.raceID == -1)
     return;
 
   auto options = GAMEDATABASE.sqlQuery(QString("SELECT ID, Flags FROM ChrCustomizationOption WHERE ChrModelID = %1 AND ChrCustomizationID != 0 ORDER BY OrderIndex").arg(infos.ChrModelID[0]));
+
+  // Some ChrModels have EVERY option with ChrCustomizationID == 0 (e.g. the
+  // Dracthyr visage male, ChrModelID 127, plus ~22 newer forms). For those the
+  // filter above returns nothing and the character renders with no customization
+  // -> a blank body. Fall back to the unfiltered option set ONLY in that case, so
+  // models that do have ChrCustomizationID-tagged options keep their exact prior
+  // behaviour (no regression) while the otherwise-blank models become customisable.
+  if (!options.valid || options.values.empty())
+    options = GAMEDATABASE.sqlQuery(QString("SELECT ID, Flags FROM ChrCustomizationOption WHERE ChrModelID = %1 ORDER BY OrderIndex").arg(infos.ChrModelID[0]));
 
   if (options.valid)
     for (auto& option : options.values)
@@ -205,8 +253,64 @@ void CharDetails::fillCustomizationMap()
   LINKED_OPTIONS_MAP_.clear();
   initLinkedOptionsMap();
 
+  // Load per-choice requirement masks (class/race) so we can hide choices that
+  // don't apply to this character -- e.g. Demon-Hunter-only horns/blindfold/
+  // tattoos on a regular character (ChrCustomizationReq.ClassMask & 0x800).
+  auto reqs = GAMEDATABASE.sqlQuery(
+    "SELECT ChrCustomizationChoice.ID, ChrCustomizationReq.ClassMask, ChrCustomizationReq.RaceMask "
+    "FROM ChrCustomizationChoice "
+    "JOIN ChrCustomizationReq ON ChrCustomizationReq.ID = ChrCustomizationChoice.ChrCustomizationReqID "
+    "WHERE ChrCustomizationChoice.ChrCustomizationReqID != 0");
+  if (reqs.valid)
+    for (auto & r : reqs.values)
+      choiceReq_[r[0].toUInt()] = std::make_pair(r[1].toLongLong(), r[2].toLongLong());
+
   for (auto &option : choicesPerOptionMap_)
     fillCustomizationMapForOption(option.first);
+}
+
+bool CharDetails::isChoiceAvailable(uint chrCustomizationChoiceID) const
+{
+  const auto it = choiceReq_.find(chrCustomizationChoiceID);
+  if (it == choiceReq_.end())
+    return true; // no requirement -> available to everyone
+
+  const long long raceMask = it->second.second;
+
+  // ChrCustomizationReq.RaceMask is a 64-bit race bitmask (race N => bit N-1). A value
+  // of exactly 0xFFFFFFFF (the low 32 bits set, no high bits) is a generic "classic
+  // races" placeholder shared by ~1300 conditional/borrowed choices: transmog-only
+  // eyes, Evoker "Primalist" eye colours, the Dracthyr "Eye Style", and other
+  // achievement/class-gated extras. Real, curated race choices carry a proper 64-bit
+  // mask (high race bits set). WMV cannot evaluate those extra conditions and the
+  // in-game appearance editor doesn't list them, so treat the placeholder as
+  // unavailable -- this is what produced the long run of meaningless Eye Colour entries
+  // (14, 18, 20 ...) on an ordinary Blood Elf.
+  if (raceMask == 0xFFFFFFFFll)
+    return false;
+  // Otherwise this character's race must actually be present in the mask (0 = no race
+  // restriction). This also drops choices whose curated mask simply doesn't include us.
+  if (raceMask != 0 && model_ && model_->infos.raceID > 0)
+  {
+    const unsigned long long raceBit = 1ull << (model_->infos.raceID - 1);
+    if ((static_cast<unsigned long long>(raceMask) & raceBit) == 0)
+      return false;
+  }
+
+  // ChrCustomizationReq.ClassMask is an int32 class bitmask (class N => bit N-1).
+  // 0 = no class restriction; "all classes" comes through as the unsigned int32
+  // sentinel 0xFFFFFFFF (NOT -1, since it's read unsigned). We only model Demon
+  // Hunter specially: hide a choice only when it is DEMON-HUNTER-EXCLUSIVE -- the
+  // DH bit (0x800, class 12) is the ONLY player-class bit set -- and we are not in
+  // Demon Hunter mode. Masking to the 13 player-class bits makes the "all classes"
+  // value (0x1FFF / 0xFFFFFFFF) read as non-exclusive, so normal choices (hair,
+  // eyes, skin, the "None" options) are never filtered out.
+  const long long classBits = it->second.first & 0x1FFFll; // player classes 1..13
+  const bool dhExclusive = (classBits != 0) && ((classBits & ~0x800ll) == 0);
+  if (dhExclusive && !isDemonHunter_)
+    return false;
+
+  return true;
 }
 
 void CharDetails::fillCustomizationMapForOption(uint chrCustomizationOption)
@@ -218,7 +322,11 @@ void CharDetails::fillCustomizationMapForOption(uint chrCustomizationOption)
   vals.clear();
 
   // 1. fill direct values
-  auto choices = GAMEDATABASE.sqlQuery(QString("SELECT ID FROM ChrCustomizationChoice WHERE ChrCustomizationOptionID = %1 ORDER BY OrderIndex").arg(chrCustomizationOption));
+  // ORDER BY ID as a tiebreaker after OrderIndex: several choices can share an
+  // OrderIndex, and without a stable secondary sort SQLite returns them in an
+  // arbitrary order, so reset()'s "first available choice" default would vary
+  // between loads (a character's default skin/markings changing each time).
+  auto choices = GAMEDATABASE.sqlQuery(QString("SELECT ID FROM ChrCustomizationChoice WHERE ChrCustomizationOptionID = %1 ORDER BY OrderIndex, ID").arg(chrCustomizationOption));
   if (choices.valid)
   {
     LOG_INFO << __FUNCTION__ << "DIRECT values" << choices.values.size();
@@ -349,6 +457,11 @@ void CharDetails::set(uint chrCustomizationOptionID, uint chrCustomizationChoice
     }
   }
 
+  // If this choice adds a skinned model whose texture is gated by another option
+  // (e.g. a DH blindfold needs a DH eye-glow colour), make sure that option holds a
+  // compatible value, otherwise the model merges untextured and renders white.
+  autoSelectTextureGating(chrCustomizationChoiceID);
+
   CharDetailsEvent event(this, CharDetailsEvent::CHOICE_LIST_CHANGED);
   event.setCustomizationOptionId(chrCustomizationOptionID);
   notify(event);
@@ -357,13 +470,88 @@ void CharDetails::set(uint chrCustomizationOptionID, uint chrCustomizationChoice
  // TEXTUREMANAGER.dump();
 }
 
+void CharDetails::autoSelectTextureGating(uint chrCustomizationChoiceID)
+{
+  if (autoSelectInProgress_ || !model_)
+    return;
+
+  // Only choices that add a skinned model can end up merged-but-untextured this way.
+  auto sm = GAMEDATABASE.sqlQuery(QString(
+    "SELECT 1 FROM ChrCustomizationElement WHERE ChrCustomizationChoiceID = %1 "
+    "AND ChrCustomizationSkinnedModelID != 0 LIMIT 1").arg(chrCustomizationChoiceID));
+  if (!sm.valid || sm.values.empty())
+    return;
+
+  // The choice's direct-bind (non-skin) material elements, with the related choice that
+  // supplies each. A SKIN-typed material composes into the body skin, so the model is
+  // textured regardless and needs no gating; only non-skin (direct-bind) materials can
+  // leave it white.
+  auto mats = GAMEDATABASE.sqlQuery(QString(
+    "SELECT ChrCustomizationElement.RelatedChrCustomizationChoiceID, ChrModelTextureLayer.TextureType "
+    "FROM ChrCustomizationElement "
+    "JOIN ChrCustomizationMaterial ON ChrCustomizationElement.ChrCustomizationMaterialID = ChrCustomizationMaterial.ID "
+    "LEFT JOIN ChrModelTextureLayer ON ChrCustomizationMaterial.ChrModelTextureTargetID = ChrModelTextureLayer.ChrModelTextureTargetID1 "
+    "AND ChrModelTextureLayer.CharComponentTextureLayoutsID = %1 "
+    "WHERE ChrCustomizationElement.ChrCustomizationChoiceID = %2 "
+    "AND ChrCustomizationElement.ChrCustomizationMaterialID != 0").arg(model_->infos.textureLayoutID).arg(chrCustomizationChoiceID));
+  if (!mats.valid)
+    return;
+
+  // gating option -> compatible related choices that would supply a texture
+  std::map<uint, std::vector<uint> > gates;
+  bool hasUngated = false;
+  for (auto & m : mats.values)
+  {
+    const uint related = m[0].toUInt();
+    const int type = m[1].toInt();
+    if (type == 1) // SKIN texture type: composed into the body skin, never leaves white
+      continue;
+    if (related == 0)
+    {
+      hasUngated = true; // a texture that always applies -> no gating needed
+      continue;
+    }
+    auto opt = GAMEDATABASE.sqlQuery(QString(
+      "SELECT ChrCustomizationOptionID FROM ChrCustomizationChoice WHERE ID = %1").arg(related));
+    if (opt.valid && !opt.values.empty())
+      gates[opt.values[0][0].toUInt()].push_back(related);
+  }
+
+  if (hasUngated || gates.empty())
+    return;
+
+  autoSelectInProgress_ = true;
+  for (auto & g : gates)
+  {
+    const uint optID = g.first;
+    if (choicesPerOptionMap_.count(optID) == 0)
+      continue; // gating option not present on this model
+    const uint cur = get(optID);
+    if (std::find(g.second.begin(), g.second.end(), cur) != g.second.end())
+      continue; // already a compatible value, nothing to do
+    LOG_INFO << "autoSelectTextureGating: choice" << chrCustomizationChoiceID
+             << "needs option" << optID << "-> switching it to compatible choice" << g.second.front();
+    set(optID, g.second.front());
+  }
+  autoSelectInProgress_ = false;
+}
+
 std::vector<uint> CharDetails::getCustomizationChoices(const uint chrCustomizationOptionID)
 {
   if (choicesPerOptionMap_.count(chrCustomizationOptionID) == 0)
     fillCustomizationMap();
 
-  return choicesPerOptionMap_.at(chrCustomizationOptionID);
+  if (choicesPerOptionMap_.count(chrCustomizationOptionID) == 0)
+    return {};
 
+  // Only expose choices whose requirements are met for this character, so the
+  // dropdown hides Demon-Hunter-only choices on a non-DH (matches Wowhead).
+  std::vector<uint> available;
+  for (const uint choiceID : choicesPerOptionMap_.at(chrCustomizationOptionID))
+    if (isChoiceAvailable(choiceID))
+      available.push_back(choiceID);
+
+  return available;
 }
 
 uint CharDetails::get(uint chrCustomizationOptionID) const
@@ -568,7 +756,7 @@ void CharDetails::refreshGeosets()
   geosets.clear();
 
   // NOTE: default geoset visibility is decided per-geoset in WoWModel::refresh()
-  // using wow.export's rule (show id 0 / *01 / 32xx face; hide 17xx eye-glow /
+  // using the face-geoset rule (show id 0 / *01 / 32xx face; hide 17xx eye-glow /
   // 35xx earrings). This map only records explicit toggles and customization
   // choices, which override those defaults via setGeosetGroupDisplay().
 
@@ -577,28 +765,19 @@ void CharDetails::refreshGeosets()
   else
     geosets[CG_EARS] = 0;
 
-  geosets[CG_FACE_1] = geosets[CG_FACE_2] = geosets[CG_FACE_3] = 0;
+  // The facial-feature groups (1/2/3) carry facial hair, which is now a
+  // customization option resolved by applyCustomizationGeosets(). Only force
+  // them off when the user has explicitly disabled facial hair; otherwise leave
+  // them untouched so the customization result is not clobbered by the
+  // group-narrowing loop in WoWModel::refresh().
+  if (!showFacialHair)
+    geosets[CG_FACE_1] = geosets[CG_FACE_2] = geosets[CG_FACE_3] = 0;
 
-  // apply customization elements
-  for (const auto& elt : customizationElementsPerOption_)
-  {
-    for (auto geo : elt.second.geosets)
-    {
-      // don't display ears if option is unchecked
-      if (geo.first == CG_EARS && !showEars)
-        continue;
-
-      // don't display hair if option is unchecked
-      if (geo.first == CG_SKIN_OR_HAIR && !showHair)
-        continue;
-
-      // ond't display facila hairs if option is unchecked
-      if ((geo.first == CG_FACE_1 || geo.first == CG_FACE_2 || geo.first == CG_FACE_3) && !showFacialHair)
-        continue;
-
-      geosets[geo.first] = geo.second;
-    }
-  }
+  // NOTE: customization-choice geosets are applied selectively in
+  // applyCustomizationGeosets() -- it toggles only the specific choice geosets
+  // (show the active choice's geoset, hide the other choices' geosets). The old
+  // group-narrowing here (setGeosetGroupDisplay) wrongly hid body geosets such
+  // as the bare arms when they shared a group with a customization option.
 
   if (model_)
   {
@@ -617,6 +796,84 @@ void CharDetails::refreshGeosets()
     }
   }
 
+}
+
+const std::vector<std::pair<int, uint> > & CharDetails::getChoiceGeosetElements(uint chrCustomizationChoiceID)
+{
+  const auto it = choiceGeosetElements_.find(chrCustomizationChoiceID);
+  if (it != choiceGeosetElements_.end())
+    return it->second;
+
+  // ALL geoset elements of the choice, each with its RelatedChrCustomizationChoiceID.
+  // A single choice can reference several geosets, each gated by a related choice:
+  // e.g. a Dracthyr drake's "Arm Spikes"/"Body Size" choice maps to a DIFFERENT
+  // group variant depending on the active Body Size / related option (geoset 4201 vs
+  // 4211). The related gate is what makes those variants mutually exclusive; ignoring
+  // it (and just taking the last row) left two variants of the same group visible at
+  // once -> z-fighting / spikes poking through. model geoset id = GeosetType*100 + GeosetID.
+  std::vector<std::pair<int, uint> > elems;
+  auto r = GAMEDATABASE.sqlQuery(QString(
+    "SELECT ChrCustomizationGeoset.GeosetType, ChrCustomizationGeoset.GeosetID, ChrCustomizationElement.RelatedChrCustomizationChoiceID "
+    "FROM ChrCustomizationElement "
+    "JOIN ChrCustomizationGeoset ON ChrCustomizationElement.ChrCustomizationGeosetID = ChrCustomizationGeoset.ID "
+    "WHERE ChrCustomizationElement.ChrCustomizationChoiceID = %1 "
+    "AND ChrCustomizationElement.ChrCustomizationGeosetID != 0 "
+    "ORDER BY ChrCustomizationElement.ID").arg(chrCustomizationChoiceID));
+
+  if (r.valid)
+    for (const auto & row : r.values)
+      elems.emplace_back(row[0].toInt() * 100 + row[1].toInt(), row[2].toUInt());
+
+  return choiceGeosetElements_.emplace(chrCustomizationChoiceID, std::move(elems)).first->second;
+}
+
+void CharDetails::applyCustomizationGeosets()
+{
+  if (!model_)
+    return;
+
+  // Apply customization-choice geosets. Each customization OPTION is mutually
+  // exclusive within the set of geosets ITS choices control: the active choice's
+  // applicable geosets are shown and every other geoset that any of the option's
+  // choices could touch is hidden. This both shows the right variant AND suppresses
+  // the group's default-on *01 geoset when a different/None variant is selected.
+  //
+  // An element only APPLIES when its RelatedChrCustomizationChoiceID is 0
+  // (unconditional) or is itself an active choice -- that gate is what makes the
+  // Dracthyr drake's related-dependent variants (geoset 4201 vs 4211, 4301 vs 4302)
+  // mutually exclusive instead of overlapping (z-fighting).
+  //
+  // We collect the show-set and the controlled-set across ALL active options FIRST,
+  // then apply once, so a geoset shared by two options (e.g. the undead jaw geoset
+  // 202 used by several styles) is shown if ANY active choice wants it -- "active
+  // wins" -- and is never clobbered back off by a sibling option.
+  std::set<uint> activeChoices;
+  for (const auto & a : currentCustomization_)
+    activeChoices.insert(a.second);
+
+  std::set<int> controlled;  // geosets any active option controls
+  std::set<int> show;        // geosets the active choices want shown
+  for (const auto & active : currentCustomization_) // option id -> active choice id
+  {
+    const auto choicesIt = choicesPerOptionMap_.find(active.first);
+    if (choicesIt == choicesPerOptionMap_.end())
+      continue;
+
+    for (const uint choiceID : choicesIt->second)
+    {
+      const bool isActive = (choiceID == active.second);
+      for (const auto & ge : getChoiceGeosetElements(choiceID))
+      {
+        controlled.insert(ge.first);
+        const bool gateOk = (ge.second == 0) || (activeChoices.count(ge.second) != 0);
+        if (isActive && gateOk)
+          show.insert(ge.first);
+      }
+    }
+  }
+
+  for (const int id : controlled)
+    model_->setGeosetDisplayById(id, show.count(id) != 0);
 }
 
 void CharDetails::refreshTextures()
@@ -657,13 +914,31 @@ void CharDetails::refreshSkinnedModels()
 
   models_.clear();
 
+  // Several elements can share ONE collection-model file (e.g. the DH horn +
+  // blindfold pack 7760202), each selecting a different geoset GROUP within it.
+  // Merge each file ONCE and apply ALL of its selected groups, otherwise a later
+  // element's hideAllGeosets() wipes an earlier element's geoset (so the horns
+  // vanish the moment a blindfold is also active, and vice-versa).
+  std::map<uint, std::vector<std::pair<uint, uint> > > groupsByFile; // fileID -> [(GeosetType, GeosetID)]
   for (const auto& elt : customizationElementsPerOption_)
-  {
     for (const auto m : elt.second.models)
     {
-      auto * model = model_->mergeModel(m.first);
-      model->setGeosetGroupDisplay((CharGeosets)m.second.first, m.second.second);
+      groupsByFile[m.first].push_back(m.second);
       models_.emplace_back(m.first, m.second);
     }
+
+  for (const auto& gf : groupsByFile)
+  {
+    auto * model = model_->mergeModel(gf.first);
+    if (!model)
+      continue;
+    // Hide everything, then show only the selected variant of each group.
+    // setGeosetGroupDisplay's strict "id > GeosetType*100" test means a GeosetID of
+    // 0 selects NOTHING -- correct, because a GeosetID-0 choice is the "None"
+    // variant (e.g. Blindfold = None -> geoset 2500) which must stay hidden. Real
+    // attachments (DH horns 2401, etc.) use GeosetID >= 1 and show normally.
+    model->hideAllGeosets();
+    for (const auto& g : gf.second)
+      model->setGeosetGroupDisplay((CharGeosets)g.first, g.second);
   }
 }

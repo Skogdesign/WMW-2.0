@@ -8,11 +8,75 @@ class ModelViewer;
 #include <wx/string.h>
 #include <wx/treectrl.h> // wxTreeItemId
 
+#include "metaclasses/Container.h"
+
+class TreeStackItem; // defined below
+
 class FileTreeData:public wxTreeItemData
 {
 public:
   GameFile * file;
-  FileTreeData(GameFile * f): file(f) {}
+  TreeStackItem * node; // owning hierarchy node, for lazily filling in children on expand
+  FileTreeData(GameFile * f, TreeStackItem * n = 0): file(f), node(n) {}
+};
+
+// One node of the file tree. The whole path hierarchy is built up front (cheap),
+// but its rows are only added to the wxTreeCtrl when a branch is expanded --
+// building all ~130k rows eagerly took ~9s and dominated startup and every search.
+class TreeStackItem : public Container<TreeStackItem>
+{
+  public:
+    wxTreeItemId id;
+    GameFile * file;
+    bool loaded;   // have this node's children been added to the wxTreeCtrl yet?
+
+    TreeStackItem() : file(0), loaded(false) {}
+
+    bool hasChildren() const { return !m_childrenMap.empty(); }
+
+    TreeStackItem * getChildByName(QString name)
+    {
+      std::map<QString, TreeStackItem *>::iterator it = m_childrenMap.find(name);
+      if(it != m_childrenMap.end())
+        return it->second;
+      return 0;
+    }
+
+    void onChildAdded(TreeStackItem * child)
+    {
+      m_childrenMap[child->name()] = child;
+    }
+
+    // LAZY: add only this node's direct children to the tree, marking branches as
+    // having children (the expand arrow) without recursing. Idempotent.
+    void appendChildren(wxTreeCtrl * tree)
+    {
+      if (loaded)
+        return;
+      loaded = true;
+      for(std::map<QString, TreeStackItem *>::iterator it = m_childrenMap.begin(); it != m_childrenMap.end(); ++it)
+      {
+        TreeStackItem * c = it->second;
+        c->id = tree->AppendItem(id, c->name().toStdWString(), -1, -1, new FileTreeData(c->file, c));
+        if (c->hasChildren())
+          tree->SetItemHasChildren(c->id, true);
+      }
+    }
+
+    // EAGER: add the whole subtree at once. Used for search results, which are small.
+    void createTreeItems(wxTreeCtrl * tree)
+    {
+      loaded = true;
+      for(std::map<QString, TreeStackItem *>::iterator it = m_childrenMap.begin(); it != m_childrenMap.end(); ++it)
+      {
+        TreeStackItem * c = it->second;
+        c->id = tree->AppendItem(id, c->name().toStdWString(), -1, -1, new FileTreeData(c->file, c));
+        c->createTreeItems(tree);
+      }
+    }
+
+  private:
+    std::map<QString, TreeStackItem *> m_childrenMap;
 };
 
 class FileControl: public wxWindow
@@ -28,6 +92,7 @@ public:
   void Init(ModelViewer* mv=NULL);
   void OnTreeSelect(wxTreeEvent &event);
   void OnTreeCollapsedOrExpanded(wxTreeEvent &event);
+  void OnTreeItemExpanding(wxTreeEvent &event);
   void OnButton(wxCommandEvent &event);
   void OnChoice(wxCommandEvent &event);
   void OnTreeMenu(wxTreeEvent &event);
@@ -48,45 +113,9 @@ public:
 private:
   void ClearCanvas();
 
-  class TreeStackItem : public Container<TreeStackItem>
-  {
-    public:
-      wxTreeItemId id;
-      GameFile * file;
-
-      TreeStackItem() : file(0) {}
-
-      TreeStackItem * getChildByName(QString name)
-      {
-        std::map<QString, TreeStackItem *>::iterator it = m_childrenMap.find(name);
-
-        if(it != m_childrenMap.end())
-          return it->second;
-
-        return 0;
-      }
-
-      void onChildAdded(TreeStackItem * child)
-      {
-        m_childrenMap[child->name()] = child;
-      }
-
-      void createTreeItems(wxTreeCtrl * tree)
-      {
-        for(std::map<QString, TreeStackItem *>::iterator it = m_childrenMap.begin();
-            it != m_childrenMap.end() ;
-            ++it)
-        {
-          TreeStackItem * child = it->second;
-          child->id = tree->AppendItem(id, it->second->name().toStdWString(), -1, -1, ((it->second->file)?new FileTreeData(it->second->file):0));
-          child->createTreeItems(tree);
-
-        }
-      }
-
-    private:
-      std::map<QString, TreeStackItem *> m_childrenMap;
-  };
+  // Persistent file-tree hierarchy (rebuilt each Init/search). It must outlive
+  // Init() so collapsed branches can be filled in lazily on expand.
+  TreeStackItem * m_treeRoot;
 };
 
 #endif

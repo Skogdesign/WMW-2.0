@@ -11,6 +11,7 @@
 #include "globalvars.h"
 #include "logger/Logger.h"
 #include "modelviewer.h"
+#include "RaceInfos.h"
 #include "Texture.h"
 
 IMPLEMENT_CLASS(FileControl, wxWindow)
@@ -18,6 +19,7 @@ IMPLEMENT_CLASS(FileControl, wxWindow)
 BEGIN_EVENT_TABLE(FileControl, wxWindow)
   // model tree
   EVT_TREE_SEL_CHANGED(ID_FILELIST, FileControl::OnTreeSelect)
+  EVT_TREE_ITEM_EXPANDING(ID_FILELIST, FileControl::OnTreeItemExpanding)
   EVT_TREE_ITEM_EXPANDED(ID_FILELIST, FileControl::OnTreeCollapsedOrExpanded)
   EVT_TREE_ITEM_COLLAPSED(ID_FILELIST, FileControl::OnTreeCollapsedOrExpanded)
   EVT_BUTTON(ID_FILELIST_SEARCH, FileControl::OnButton)
@@ -75,6 +77,7 @@ FileControl::FileControl(wxWindow* parent, wxWindowID id)
 {
   modelviewer = NULL;
   filterMode = FILE_FILTER_MODEL;
+  m_treeRoot = NULL;
 
   if (Create(parent, id, wxDefaultPosition, wxSize(170,700), 0, wxT("ModelControlFrame")) == false) {
     LOG_ERROR << "Failed to create a window for our FileControl!";
@@ -132,9 +135,27 @@ void FileControl::Init(ModelViewer* mv)
   GAMEDIRECTORY.getFilteredFiles(files, filterString);
 
   LOG_INFO << "Initializing File Controls - Filtering done - files found" << files.size();
-  TreeStackItem root;
+
+  // When listing models, the raw character/ folder is replaced by the curated
+  // "Characters" race browser built below (Playable / NPC), so skip the raw
+  // character/ entries here to avoid showing both. Other filters (textures, etc.)
+  // keep the character/ folder since there's no race browser for them.
+  // Only substitute the race browser when NOT searching: during a search the
+  // curated node ignores the query, so the raw character/ matches must remain
+  // visible or character searches would return nothing.
+  const bool buildRaceTree = (filterStrings[filterMode] == "m2") && content.isEmpty();
+
+  // Build a fresh hierarchy and keep it on the control (the previous one is left to
+  // leak -- the Component ref-counting underflows on unref, so the tree always has;
+  // this matches the prior behaviour while letting branches be filled in on expand).
+  m_treeRoot = new TreeStackItem();
+  TreeStackItem & root = *m_treeRoot;
   for (std::set<GameFile *>::iterator it = files.begin(); it != files.end(); ++it)
   {
+    // fullname() may use '/' or '\\'; normalise like beautifyFileName before testing
+    if (buildRaceTree && (*it)->fullname().toLower().replace('/', '\\').startsWith("character\\"))
+      continue;
+
     QString name = (*it)->fullname();
     name += " [";
     name += QString::number((*it)->fileDataId());
@@ -161,15 +182,89 @@ void FileControl::Init(ModelViewer* mv)
     curparent->addChild(child);
   }
 
+  // Add a race-categorised "Characters" section (Playable / NPC), driven by
+  // ChrRaces, replacing the raw character/ folder skipped above.
+  // Each race gets Male/Female leaves that point at the model GameFile, so they
+  // load through the normal tree-selection path.
+  if (buildRaceTree)
+  {
+    const auto raceMenu = RaceInfos::getRaceMenu();
+    if (!raceMenu.empty())
+    {
+      TreeStackItem * charRaces = new TreeStackItem();
+      charRaces->setName("Characters");
+      TreeStackItem * playable = new TreeStackItem();
+      playable->setName("Playable Races");
+      TreeStackItem * npc = new TreeStackItem();
+      npc->setName("NPC Races");
+      charRaces->addChild(playable);
+      charRaces->addChild(npc);
+
+      for (const auto & e : raceMenu)
+      {
+        TreeStackItem * raceNode = new TreeStackItem();
+        raceNode->setName(QString::fromStdString(e.name));
+
+        bool hasModel = false;
+        const std::pair<int, const char *> sexes[2] = { { e.maleFileID, "Male" }, { e.femaleFileID, "Female" } };
+        for (const auto & s : sexes)
+        {
+          if (s.first <= 0)
+            continue;
+          GameFile * f = GAMEDIRECTORY.getFile(s.first);
+          if (!f)
+            continue;
+          TreeStackItem * leaf = new TreeStackItem();
+          leaf->file = f;
+          leaf->setName(s.second);
+          raceNode->addChild(leaf);
+          hasModel = true;
+        }
+
+        if (hasModel)
+          (e.isNPC ? npc : playable)->addChild(raceNode);
+        else
+          delete raceNode;
+      }
+
+      root.addChild(charRaces);
+    }
+  }
+
   LOG_INFO << "Initializing File Controls - File Hierarchy created";
+
+  // Populate the tree inside Freeze()/Thaw() to batch repaints. When browsing
+  // (no search) populate LAZILY: only the top-level rows are added now, and each
+  // branch's children are filled in when it is expanded (OnTreeItemExpanding).
+  // Building all ~130k rows up front took ~9s and dominated startup. When a search
+  // is active the result set is small, so populate eagerly and expand it.
+  fileTree->Freeze();
   fileTree->DeleteAllItems();
   root.id = fileTree->AddRoot(wxT("Root"));
-  root.createTreeItems(fileTree);
+  if (content.isEmpty())
+  {
+    root.appendChildren(fileTree);
+  }
+  else
+  {
+    root.createTreeItems(fileTree);
+    fileTree->ExpandAll();
+  }
+  fileTree->Thaw();
 
   LOG_INFO << "Initializing File Controls - END";
+}
 
-  if (content != "")
-    fileTree->ExpandAll();
+// Lazy tree fill-in: when a collapsed branch is expanded, add its direct children
+// to the wxTreeCtrl (idempotent -- appendChildren no-ops once a node is loaded).
+void FileControl::OnTreeItemExpanding(wxTreeEvent &event)
+{
+  const wxTreeItemId item = event.GetItem();
+  if (!item.IsOk())
+    return;
+  FileTreeData * data = (FileTreeData *)fileTree->GetItemData(item);
+  if (data && data->node)
+    data->node->appendChildren(fileTree);
 }
 
 void FileControl::OnChoice(wxCommandEvent &event)

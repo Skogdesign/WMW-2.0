@@ -26,7 +26,7 @@ core::GameDatabase::~GameDatabase()
 
 
 core::GameDatabase::GameDatabase()
-: m_db(NULL), m_fastMode(false)
+: m_db(NULL), m_fastMode(true) // cache the built DB to disk and reuse it across launches (see initFromXML)
 {
 
 }
@@ -35,8 +35,49 @@ bool core::GameDatabase::initFromXML(const QString & file)
 {
    int rc = 1;
 
+   // Fast mode keeps a persistent on-disk copy of the database (wowdb.sqlite) so
+   // we can skip the ~20s DB2 -> SQLite rebuild on every launch. createDatabaseFromXML
+   // only fill()s a table when create() succeeds, and create() ("CREATE TABLE")
+   // fails for tables that already exist -- so an existing cache is reused as-is.
+   // We MUST invalidate the cache when the WoW build changes, otherwise we'd serve
+   // stale/mismatched table data, so the build version is recorded alongside it.
+   static const char * DB_PATH  = "./wowdb.sqlite";
+   static const char * VER_PATH = "./wowdb.sqlite.build";
+   QString buildVersion;
+
    if(m_fastMode)
-    rc = sqlite3_open("./wowdb.sqlite", &m_db);
+   {
+     // Cache key = WoW build + our schema version. Bump SCHEMA_VERSION whenever the
+     // table layout in database.xml (or how we read it) changes, so an old cache
+     // built with a different schema is rebuilt rather than queried and failing.
+     static const int SCHEMA_VERSION = 5;
+     const QString build = GAMEDIRECTORY.version(); // current WoW build, e.g. "12.0.1.66220"
+     buildVersion = build.isEmpty() ? QString() : (build + "|schema" + QString::number(SCHEMA_VERSION));
+
+     QString cachedVersion;
+     {
+       QFile vf(VER_PATH);
+       if (vf.open(QIODevice::ReadOnly | QIODevice::Text))
+       {
+         cachedVersion = QString::fromUtf8(vf.readAll()).trimmed();
+         vf.close();
+       }
+     }
+
+     if (buildVersion.isEmpty() || cachedVersion != buildVersion)
+     {
+       LOG_INFO << "Database cache stale or missing (cached:" << cachedVersion
+                << "/ current:" << buildVersion << ") - rebuilding from DB2";
+       QFile::remove(DB_PATH);
+       QFile::remove(VER_PATH);
+     }
+     else
+     {
+       LOG_INFO << "Reusing cached database for" << buildVersion << "(skipping DB2 rebuild)";
+     }
+
+     rc = sqlite3_open(DB_PATH, &m_db);
+   }
    else
     rc = sqlite3_open(":memory:", &m_db);
 
@@ -50,9 +91,41 @@ bool core::GameDatabase::initFromXML(const QString & file)
      LOG_INFO << "Opened database successfully";
    }
 
+   if (m_fastMode)
+   {
+     // The build does thousands of chunked INSERTs; with the default rollback
+     // journal + synchronous=FULL each commit fsyncs, which would make the first
+     // on-disk build far slower than the in-memory one. The cache is always
+     // rebuildable (invalidated by build version) so durability is irrelevant.
+     sqlite3_exec(m_db, "PRAGMA synchronous=OFF; PRAGMA journal_mode=MEMORY; PRAGMA temp_store=MEMORY;", nullptr, nullptr, nullptr);
+   }
+
+   // Performance: memory-map the on-disk cache and give SQLite a big page cache so
+   // the many small lookups each action fires (customization choices, item/equipment
+   // display info, texture/section composition) are served from RAM instead of disk
+   // reads. The DB is ~80 MB, so a 512 MB mmap window covers it entirely.
+   sqlite3_exec(m_db,
+     "PRAGMA mmap_size=536870912;"   // 512 MB memory-mapped I/O
+     "PRAGMA cache_size=-131072;",   // 128 MB page cache (negative = KiB)
+     nullptr, nullptr, nullptr);
+
    sqlite3_profile(m_db, GameDatabase::logQueryTime, m_db);
 
-   return createDatabaseFromXML(core::Game::instance().configFolder() + file);
+   const bool ok = createDatabaseFromXML(core::Game::instance().configFolder() + file);
+
+   // Record the build the cache was produced for, so it can be validated next time.
+   // (Skip when the build version is unknown -- we don't want to trust a blind cache.)
+   if (m_fastMode && ok && !buildVersion.isEmpty())
+   {
+     QFile vf(VER_PATH);
+     if (vf.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text))
+     {
+       vf.write(buildVersion.toUtf8());
+       vf.close();
+     }
+   }
+
+   return ok;
 }
 
 sqlResult core::GameDatabase::sqlQuery(const QString & query)

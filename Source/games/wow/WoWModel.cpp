@@ -2,7 +2,9 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cstring>
 #include <sstream>
+#include <string>
 
 #include "Attachment.h"
 #include "CASCFile.h"
@@ -437,6 +439,10 @@ void WoWModel::initCommon()
   memcpy(&header, gamefile->getBuffer(), sizeof(ModelHeader));
 
   LOG_INFO << "Loading model:" << tempname << "size:" << gamefile->getSize();
+  if (getenv("WMV_DUMP_ANIMCOUNT"))
+    LOG_INFO << "ANIMCOUNT nAnimations" << header.nAnimations << "nGlobalSequences" << header.nGlobalSequences
+             << "nColors" << header.nColors << "nTransparency" << header.nTransparency
+             << "nTexAnims" << header.nTexAnims << "(MAX_ANIMATED=500)";
 
   // displayHeader(header);
 
@@ -622,7 +628,15 @@ void WoWModel::initCommon()
       gamefile->setChunk("MD21", false);
     }
 
-    for (size_t I = 0; I < header.nTextures; I++)
+    // header.nTextures is an unchecked count straight from the .m2 file, while
+    // textures[]/specialTextures[] hold only TEXTURE_MAX entries. Writing past them
+    // corrupts the heap (intermittent 0xC0000374). Clamp as a safety net (the array
+    // size was also raised to fit modern models).
+    if (header.nTextures > TEXTURE_MAX)
+      LOG_ERROR << "Model declares" << header.nTextures << "textures, capping at" << TEXTURE_MAX << ":" << gamefile->fullname();
+    const size_t nTextures = (header.nTextures > (uint32)TEXTURE_MAX) ? (size_t)TEXTURE_MAX : (size_t)header.nTextures;
+
+    for (size_t I = 0; I < nTextures; I++)
     {
       /*
       Texture Types
@@ -657,10 +671,11 @@ void WoWModel::initCommon()
 
       if (texdef[I].type == TEXTURE_FILENAME)  // 0
       {
-        GameFile * Tex;
+        GameFile * Tex = nullptr;
         if (txids.size() > 0)
         {
-          Tex = GAMEDIRECTORY.getFile(txids[I].fileDataId);
+          if (I < txids.size()) // the TXID chunk can hold fewer entries than nTextures
+            Tex = GAMEDIRECTORY.getFile(txids[I].fileDataId);
         }
         else
         {
@@ -1104,6 +1119,26 @@ void WoWModel::initAnimated()
     if (keyBoneLookup[k] < -1 || keyBoneLookup[k] >= static_cast<int>(bones.size()))
       keyBoneLookup[k] = -1;
 
+  // Sanitize every bone's PARENT index for the same reason. Bone::initV3 copies
+  // ModelBoneDef.parent verbatim from the file, and Bone::calcMatrix only guards
+  // `parent > -1` (never the upper bound). A parent index >= bones.size() - which
+  // happens on modern War Within rigs (e.g. some creatures resolved via a parent
+  // skeleton/SKB1 where bones.size() differs from the index space) - makes
+  // calcMatrix recurse into allbones[parent] and WRITE a full Bone (two mat4s + a
+  // vec3 + flag) PAST THE END of the bones[] heap buffer every frame, smashing the
+  // adjacent allocation (often a GameFile, which then crashes intermittently in
+  // GameFile::fullname()). Invalidate out-of-range parents so the bone is treated
+  // as a root, exactly as keyBoneLookup is sanitized above.
+  for (size_t b = 0; b < bones.size(); b++)
+  {
+    if (bones[b].parent < -1 || bones[b].parent >= static_cast<int>(bones.size()))
+    {
+      LOG_ERROR << "Bone" << b << "has out-of-range parent" << bones[b].parent
+                << "(bones=" << bones.size() << "); treating as root.";
+      bones[b].parent = -1;
+    }
+  }
+
   // free MPQFile
   for (auto it : data.animfiles)
   {
@@ -1233,10 +1268,203 @@ void WoWModel::initAnimated()
   animcalc = false;
 }
 
+// ---------------------------------------------------------------------------
+// M2 combiner-shader resolution: maps (textureCount, shaderID) to a pixel/vertex combiner.
+//
+// War Within and later models combine up to four textures per material via a
+// Blizzard "combiner shader" selected by the material's shaderID + texture count.
+// WMV historically dropped every texture but one for these units, which is why
+// cosmic/void capes and orb halos rendered solid white. We resolve the same pixel
+// (combiner) shader id, vertex shader id (for UV routing) and the per-unit UV source
+// here, and the GLSL fragment combiner in ModelRenderPass reproduces the result.
+// ---------------------------------------------------------------------------
+namespace
+{
+  struct ShaderEntry { const char * PS; const char * VS; };
+
+  // index == (shaderID & 0x7FFF) when the 0x8000 "explicit shader" bit is set
+  static const ShaderEntry SHADER_ARRAY[] = {
+    { "Combiners_Opaque_Mod2xNA_Alpha",           "Diffuse_T1_Env"         },
+    { "Combiners_Opaque_AddAlpha",                "Diffuse_T1_Env"         },
+    { "Combiners_Opaque_AddAlpha_Alpha",          "Diffuse_T1_Env"         },
+    { "Combiners_Opaque_Mod2xNA_Alpha_Add",       "Diffuse_T1_Env_T1"      },
+    { "Combiners_Mod_AddAlpha",                   "Diffuse_T1_Env"         },
+    { "Combiners_Opaque_AddAlpha",                "Diffuse_T1_T1"          },
+    { "Combiners_Mod_AddAlpha",                   "Diffuse_T1_T1"          },
+    { "Combiners_Mod_AddAlpha_Alpha",             "Diffuse_T1_Env"         },
+    { "Combiners_Opaque_Alpha_Alpha",             "Diffuse_T1_Env"         },
+    { "Combiners_Opaque_Mod2xNA_Alpha_3s",        "Diffuse_T1_Env_T1"      },
+    { "Combiners_Opaque_AddAlpha_Wgt",            "Diffuse_T1_T1"          },
+    { "Combiners_Mod_Add_Alpha",                  "Diffuse_T1_Env"         },
+    { "Combiners_Opaque_ModNA_Alpha",             "Diffuse_T1_Env"         },
+    { "Combiners_Mod_AddAlpha_Wgt",               "Diffuse_T1_Env"         },
+    { "Combiners_Mod_AddAlpha_Wgt",               "Diffuse_T1_T1"          },
+    { "Combiners_Opaque_AddAlpha_Wgt",            "Diffuse_T1_T2"          },
+    { "Combiners_Opaque_Mod_Add_Wgt",             "Diffuse_T1_Env"         },
+    { "Combiners_Opaque_Mod2xNA_Alpha_UnshAlpha", "Diffuse_T1_Env_T1"      },
+    { "Combiners_Mod_Dual_Crossfade",             "Diffuse_T1"             },
+    { "Combiners_Mod_Depth",                      "Diffuse_EdgeFade_T1"    },
+    { "Combiners_Opaque_Mod2xNA_Alpha_Alpha",     "Diffuse_T1_Env_T2"      },
+    { "Combiners_Mod_Mod",                        "Diffuse_EdgeFade_T1_T2" },
+    { "Combiners_Mod_Masked_Dual_Crossfade",      "Diffuse_T1_T2"          },
+    { "Combiners_Opaque_Alpha",                   "Diffuse_T1_T1"          },
+    { "Combiners_Opaque_Mod2xNA_Alpha_UnshAlpha", "Diffuse_T1_Env_T2"      },
+    { "Combiners_Mod_Depth",                      "Diffuse_EdgeFade_Env"   },
+    { "Guild",                                    "Diffuse_T1_T2_T1"       },
+    { "Guild_NoBorder",                           "Diffuse_T1_T2"          },
+    { "Guild_Opaque",                             "Diffuse_T1_T2_T1"       },
+    { "Illum",                                    "Diffuse_T1_T1"          },
+    { "Combiners_Mod_Mod_Mod_Const",              "Diffuse_T1_T2_T3"       },
+    { "Combiners_Mod_Mod_Mod_Const",              "Color_T1_T2_T3"         },
+    { "Combiners_Opaque",                         "Diffuse_T1"             },
+    { "Combiners_Mod_Mod2x",                      "Diffuse_EdgeFade_T1_T2" },
+    { "Combiners_Mod",                            "Diffuse_EdgeFade_T1"    },
+    { "Combiners_Mod_Mod_Depth",                  "Diffuse_EdgeFade_T1_T2" },
+  };
+  static const int SHADER_ARRAY_COUNT = (int)(sizeof(SHADER_ARRAY) / sizeof(SHADER_ARRAY[0]));
+
+  // pixel-shader name -> fragment-shader case id (must match the GLSL switch)
+  static int pixelShaderNameToId(const std::string & n)
+  {
+    static const std::map<std::string, int> ids = {
+      { "Combiners_Opaque", 0 }, { "Combiners_Mod", 1 }, { "Combiners_Opaque_Mod", 2 },
+      { "Combiners_Opaque_Mod2x", 3 }, { "Combiners_Opaque_Mod2xNA", 4 }, { "Combiners_Opaque_Opaque", 5 },
+      { "Combiners_Mod_Mod", 6 }, { "Combiners_Mod_Mod2x", 7 }, { "Combiners_Mod_Add", 8 },
+      { "Combiners_Mod_Mod2xNA", 9 }, { "Combiners_Mod_AddNA", 10 }, { "Combiners_Mod_Opaque", 11 },
+      { "Combiners_Opaque_Mod2xNA_Alpha", 12 }, { "Combiners_Opaque_AddAlpha", 13 },
+      { "Combiners_Opaque_AddAlpha_Alpha", 14 }, { "Combiners_Opaque_Mod2xNA_Alpha_Add", 15 },
+      { "Combiners_Mod_AddAlpha", 16 }, { "Combiners_Mod_AddAlpha_Alpha", 17 },
+      { "Combiners_Opaque_Alpha_Alpha", 18 }, { "Combiners_Opaque_Mod2xNA_Alpha_3s", 19 },
+      { "Combiners_Opaque_AddAlpha_Wgt", 20 }, { "Combiners_Mod_Add_Alpha", 21 },
+      { "Combiners_Opaque_ModNA_Alpha", 22 }, { "Combiners_Mod_AddAlpha_Wgt", 23 },
+      { "Combiners_Opaque_Mod_Add_Wgt", 24 }, { "Combiners_Opaque_Mod2xNA_Alpha_UnshAlpha", 25 },
+      { "Combiners_Mod_Dual_Crossfade", 26 }, { "Combiners_Opaque_Mod2xNA_Alpha_Alpha", 27 },
+      { "Combiners_Mod_Masked_Dual_Crossfade", 28 }, { "Combiners_Opaque_Alpha", 29 },
+      { "Guild", 30 }, { "Guild_NoBorder", 31 }, { "Guild_Opaque", 32 },
+      { "Combiners_Mod_Depth", 33 }, { "Illum", 34 }, { "Combiners_Mod_Mod_Mod_Const", 35 },
+      { "Combiners_Mod_Mod_Depth", 36 },
+    };
+    auto it = ids.find(n);
+    return (it != ids.end()) ? it->second : 0;
+  }
+
+  // vertex-shader name -> id (used only to drive per-unit UV routing below)
+  static int vertexShaderNameToId(const std::string & n)
+  {
+    static const std::map<std::string, int> ids = {
+      { "Diffuse_T1", 0 }, { "Diffuse_Env", 1 }, { "Diffuse_T1_T2", 2 }, { "Diffuse_T1_Env", 3 },
+      { "Diffuse_Env_T1", 4 }, { "Diffuse_Env_Env", 5 }, { "Diffuse_T1_Env_T1", 6 }, { "Diffuse_T1_T1", 7 },
+      { "Diffuse_T1_T1_T1", 8 }, { "Diffuse_EdgeFade_T1", 9 }, { "Diffuse_T2", 10 }, { "Diffuse_T1_Env_T2", 11 },
+      { "Diffuse_EdgeFade_T1_T2", 12 }, { "Diffuse_EdgeFade_Env", 13 }, { "Diffuse_T1_T2_T1", 14 },
+      { "Diffuse_T1_T2_T3", 15 }, { "Color_T1_T2_T3", 16 }, { "BW_Diffuse_T1", 17 }, { "BW_Diffuse_T1_T2", 18 },
+    };
+    auto it = ids.find(n);
+    return (it != ids.end()) ? it->second : 0;
+  }
+
+  static std::string getPixelShaderName(int textureCount, int shaderID)
+  {
+    if (shaderID & 0x8000)
+    {
+      const int id = shaderID & 0x7FFF;
+      if (id >= SHADER_ARRAY_COUNT)
+        return "Combiners_Opaque";
+      return SHADER_ARRAY[id].PS;
+    }
+    else if (textureCount == 1)
+    {
+      return (shaderID & 0x70) ? "Combiners_Mod" : "Combiners_Opaque";
+    }
+    else
+    {
+      if (shaderID & 0x70)
+      {
+        switch (shaderID & 7)
+        {
+        case 3: return "Combiners_Mod_Add";
+        case 4: return "Combiners_Mod_Mod2x";
+        case 6: return "Combiners_Mod_Mod2xNA";
+        case 7: return "Combiners_Mod_AddNA";
+        default: return "Combiners_Mod_Mod";
+        }
+      }
+      else
+      {
+        switch (shaderID & 7)
+        {
+        case 0: return "Combiners_Opaque_Opaque";
+        case 3:
+        case 7: return "Combiners_Opaque_AddAlpha";
+        case 4: return "Combiners_Opaque_Mod2x";
+        case 6: return "Combiners_Opaque_Mod2xNA";
+        default: return "Combiners_Opaque_Mod";
+        }
+      }
+    }
+  }
+
+  static std::string getVertexShaderName(int textureCount, int shaderID)
+  {
+    if (shaderID & 0x8000)
+    {
+      const int id = shaderID & 0x7FFF;
+      if (id >= SHADER_ARRAY_COUNT)
+        return "Diffuse_T1";
+      return SHADER_ARRAY[id].VS;
+    }
+    else if (textureCount == 1)
+    {
+      if (shaderID & 0x80)  return "Diffuse_Env";
+      return (shaderID & 0x4000) ? "Diffuse_T2" : "Diffuse_T1";
+    }
+    else
+    {
+      if (shaderID & 0x80)
+        return (shaderID & 0x8) ? "Diffuse_Env_Env" : "Diffuse_Env_T1";
+      if (shaderID & 0x8) return "Diffuse_T1_Env";
+      return (shaderID & 0x4000) ? "Diffuse_T1_T2" : "Diffuse_T1_T1";
+    }
+  }
+
+  // Map a vertex-shader name to the per-texture-unit UV source. Codes match
+  // ModelRenderPass::uvSource: 0 = uv set 0 (T1), 1 = uv set 1 (T2),
+  // 2 = environment/sphere map (Env), 3 = uv set 2 (T3).
+  static void uvSourceForVSName(const std::string & name, int8 out[4])
+  {
+    out[0] = 0; out[1] = 1; out[2] = 3; out[3] = 3;
+
+    std::string s = name;
+    // strip the diffuse/color prefix
+    const char * prefixes[] = { "BW_Diffuse_", "Diffuse_", "Color_" };
+    for (const char * p : prefixes)
+    {
+      const size_t plen = strlen(p);
+      if (s.compare(0, plen, p) == 0) { s = s.substr(plen); break; }
+    }
+
+    int unit = 0;
+    size_t start = 0;
+    while (start <= s.size() && unit < 4)
+    {
+      size_t us = s.find('_', start);
+      std::string tok = (us == std::string::npos) ? s.substr(start) : s.substr(start, us - start);
+      if (!tok.empty() && tok != "EdgeFade")
+      {
+        if (tok == "T1")       out[unit++] = 0;
+        else if (tok == "T2")  out[unit++] = 1;
+        else if (tok == "T3")  out[unit++] = 3;
+        else if (tok == "Env") out[unit++] = 2;
+      }
+      if (us == std::string::npos) break;
+      start = us + 1;
+    }
+  }
+}
+
 void WoWModel::setLOD(int index)
 {
   GameFile * g;
-  
+
   if (gamefile->isChunked())
   {
     int numSkinFiles = sizeof(skinFileIDs);
@@ -1341,10 +1569,9 @@ void WoWModel::setLOD(int index)
 
     uint texOffset = 0;
     uint texCount = Tex[j].op_count;
-    // THIS IS A QUICK AND DIRTY WORKAROUND. If op_count > 1 then the texture unit contains multiple textures.
-    // Properly we should display them all, blended, but WMV doesn't support that yet, and it ends up
-    // displaying one randomly. So for now we try to guess which one is the most important by checking
-    // if any are special textures (11, 12 or 13). If so, we choose the first one that fits this criterion.
+    // For single-texture units we keep the legacy behaviour of preferring a special
+    // skin texture (11/12/13) when present. Multi-texture units are instead combined in
+    // their natural order by the GLSL combiner (see below).
     pass->specialTex = specialTextures[texlookup[Tex[j].textureid]];
     for (size_t k = 0; k < texCount; k++)
     {
@@ -1353,13 +1580,30 @@ void WoWModel::setLOD(int index)
       {
         texOffset = k;
         pass->specialTex = special;
-        if (texCount > 1)
-          LOG_INFO << "setLOD: texture unit"<<j<<"has" << texCount << "textures. Choosing texture"<<k+1<<", which has special type ="<<special;
         break;
       }
     }
+
+    pass->textureCount = (int)texCount;
+    if (texCount > 1)
+    {
+      // Multi-texture material: resolve the Blizzard combiner + per-unit UV routing and
+      // bind the textures in natural order so the fragment combiner can reproduce them.
+      texOffset = 0;
+      const int shaderID = (int)Tex[j].shading;
+      const std::string psName = getPixelShaderName((int)texCount, shaderID);
+      const std::string vsName = getVertexShaderName((int)texCount, shaderID);
+      pass->pixelShader = pixelShaderNameToId(psName);
+      pass->vertexShader = vertexShaderNameToId(vsName);
+      uvSourceForVSName(vsName, pass->uvSource);
+
+      pass->tex2 = texlookup[Tex[j].textureid + 1];
+      pass->tex3 = (texCount > 2) ? texlookup[Tex[j].textureid + 2] : ModelRenderPass::INVALID_TEX;
+      pass->tex4 = (texCount > 3) ? texlookup[Tex[j].textureid + 3] : ModelRenderPass::INVALID_TEX;
+    }
+
     pass->tex = texlookup[Tex[j].textureid + texOffset];
- 
+
     // TODO: figure out these flags properly -_-
     ModelRenderFlags &rf = renderFlags[Tex[j].flagsIndex];
 
@@ -1394,9 +1638,32 @@ void WoWModel::setLOD(int index)
     pass->twrap = (texdef[pass->tex].flags & TEXTURE_WRAPY) != 0; // Texture wrap Y
 
     // tex[j].flags: Usually 16 for static textures, and 0 for animated textures.
+    // texanimid is the modern textureTransformComboIndex: a base into the texanim
+    // lookup table, with one entry per texture in the unit (slot k = base + k). We
+    // capture unit 0's animation (legacy 'texanim') AND, for multi-texture combiner
+    // units, unit 1's animation ('texanim2') - which War Within cosmic/void materials
+    // use to scroll their glow layer (e.g. lichlord's green energy). Without it the
+    // second texture's UVs stayed static even though the combiner now renders them.
+    // Both the lookup index and the resulting texAnims index are bounds-checked
+    // (the original code did neither and relied on well-formed files).
     if ((Tex[j].flags & TEXTUREUNIT_STATIC) == 0)
     {
-      pass->texanim = texanimlookup[Tex[j].texanimid + texOffset];
+      const int base = (int)Tex[j].texanimid;
+      const int nLookup = (int)header.nTexAnimLookup;
+      const int nAnims = (int)header.nTexAnims;
+
+      if (base + (int)texOffset < nLookup)
+      {
+        const uint16 a0 = texanimlookup[base + texOffset];
+        if (a0 < nAnims)
+          pass->texanim = a0;
+      }
+      if (texCount > 1 && base + 1 < nLookup)
+      {
+        const uint16 a1 = texanimlookup[base + 1];
+        if (a1 < nAnims)
+          pass->texanim2 = a1;
+      }
     }
 
     rawPasses.push_back(pass);
@@ -1779,7 +2046,7 @@ inline void WoWModel::drawModel()
       it->deinit();
     }
   }
-  
+
   if (showWireframe)
     glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
 
@@ -2183,6 +2450,22 @@ void WoWModel::setGeosetGroupDisplay(CharGeosets group, int val)
   */
 }
 
+void WoWModel::setGeosetDisplayById(int geosetId, bool display)
+{
+  // Toggle only the geoset(s) that match this exact id. Unlike
+  // setGeosetGroupDisplay this never touches the rest of the group, so shared
+  // body geometry (bare arms, etc.) keeps whatever the default rule decided.
+  if (geosetId == 0)
+    return;
+
+  // Restrict to the original (non-merged) geosets, matching setGeosetGroupDisplay.
+  for (uint i = 0; i < rawGeosets.size(); i++)
+  {
+    if (geosets[i]->id == geosetId)
+      showGeoset(i, display);
+  }
+}
+
 void WoWModel::setCreatureGeosetData(std::set<GeosetNum> cgd)
 {
   // Hide geosets that were set by old creatureGeosetData:
@@ -2291,7 +2574,36 @@ void WoWModel::refreshMerging()
   origVertices = rawVertices;
   indices = rawIndices;
   passes = rawPasses;
-  geosets = rawGeosets;
+
+  // geosets/rawGeosets are vectors of OWNED pointers, so this must DEEP-COPY rawGeosets,
+  // never alias it. A plain `geosets = rawGeosets` made both vectors share the same
+  // ModelGeosetHD objects; afterwards restoreRawGeosets() (and the destructor) would
+  // `delete` rawGeosets' objects through `geosets` and then dereference the freed
+  // pointers via `rawGeosets` -> use-after-free, i.e. intermittent heap corruption
+  // (0xC0000374, or a later bad-vtable access violation). This path runs on every
+  // refresh() for any model, so the corruption was not merge-specific.
+  //
+  // The old aliasing also had a load-bearing side effect: because geosets[i] and
+  // rawGeosets[i] were the same object, customization code that set geosets[i]->display
+  // (run before this) persisted into rawGeosets and survived the reset. We reproduce
+  // that by preserving the current base geosets' display state by index, then re-appending
+  // the merged geosets below. (We can't just call restoreRawGeosets() here: at this point
+  // geosets may still hold the previous merge's extra entries, and its display-restore
+  // loop would run off the end of the rebuilt, base-only geosets.)
+  std::vector<bool> displayStatus;
+  displayStatus.reserve(geosets.size());
+  for (auto it : geosets)
+  {
+    displayStatus.push_back(it->display);
+    delete it;
+  }
+  geosets.clear();
+  geosets.reserve(rawGeosets.size());
+  for (auto it : rawGeosets)
+    geosets.push_back(new ModelGeosetHD(*it));
+  for (size_t i = 0; i < geosets.size() && i < displayStatus.size(); i++)
+    geosets[i]->display = displayStatus[i];
+
   textures.resize(TEXTURE_MAX);
   replaceTextures.resize(TEXTURE_MAX);
   specialTextures.resize(TEXTURE_MAX);
@@ -2311,11 +2623,17 @@ void WoWModel::refreshMerging()
 
     mergeIndex++;
 
+    // Push COPIES of the merged model's geosets, not the shared pointers. The merged
+    // model owns and frees its own geosets in its destructor, so sharing them made the
+    // parent's destructor (for (auto it : geosets) delete it) free them a SECOND time
+    // -> heap corruption (0xC0000374). Copying also keeps the merged model's originals
+    // unmodified by the istart/vstart rebasing for the parent's combined buffers.
     for (auto it : modelsIt->geosets)
     {
-      it->istart += nbIndices;
-      it->vstart += nbVertices;
-      geosets.push_back(it);
+      ModelGeosetHD * g = new ModelGeosetHD(*it);
+      g->istart += nbIndices;
+      g->vstart += nbVertices;
+      geosets.push_back(g);
     }
 
     // build bone correspondence table
@@ -2404,8 +2722,15 @@ void WoWModel::refreshMerging()
 
     for (auto it : modelsIt->specialTextures)
     {
-      if (it == -1 || it == TEXTURE_SKIN_EXTRA) // if texture type is TEXTURE_SKIN_EXTRA use parent texture
+      if (it == -1)
         specialTextures.push_back(it);
+      else if (it == TEXTURE_SKIN_EXTRA)
+        // Use the character's composed body skin for skin-extra merged parts.
+        // Pushing the raw type (8) made getGLTexture read replaceTextures[8],
+        // which is never populated (the composed skin lives at
+        // replaceTextures[TEXTURE_SKIN]), so the part rendered untextured.
+        // skin/skin-extra parts likewise bind to the composite skin.
+        specialTextures.push_back(TEXTURE_SKIN);
       else
         specialTextures.push_back(it + (mergeIndex * TEXTURE_MAX));
     }
@@ -2529,12 +2854,21 @@ void WoWModel::refresh()
   {
     if(t.type != 1)
     {
-      updateTextureList(GAMEDIRECTORY.getFile(t.fileId), t.type); 
+      updateTextureList(GAMEDIRECTORY.getFile(t.fileId), t.type);
+      // A customization texture (e.g. the DH blindfold) can belong to a MERGED
+      // collection model rather than the base character. Such a model's render
+      // passes read ITS OWN replaceTextures slot (copied into the parent at an
+      // offset by refreshMerging below), so the texture must also be set on the
+      // merged model -- otherwise the blindfold geometry renders untextured.
+      // Mirrors the merged-item path in WoWItem.cpp. updateTextureList is a no-op
+      // on models whose passes don't use this texture type, so this is safe for all.
+      for (auto * mm : mergedModels)
+        mm->updateTextureList(GAMEDIRECTORY.getFile(t.fileId), t.type);
     }
     else
     {
       tex.addLayer(GAMEDIRECTORY.getFile(t.fileId), t.region, t.layer, t.blendMode);
-    }    
+    }
   }
 
   //refresh equipment
@@ -2558,25 +2892,49 @@ void WoWModel::refresh()
     << "Tabard" << getItemId(CS_TABARD);
 
   // gloves - this is so gloves have preference over shirt sleeves.
-  if (cd.geosets[CG_GLOVES] > 1)
-    cd.geosets[CG_SLEEVES] = 0;
+  // NB: use find(), not operator[], which would INSERT {CG_GLOVES, 0} for a
+  // glove-less character. That stray entry later drove setGeosetGroupDisplay(4, 0)
+  // in the cd.geosets loop, narrowing the gloves group to the (non-existent)
+  // variant 0 and hiding the bare hand/forearm geoset 401 -> missing hands.
+  {
+    const auto glovesIt = cd.geosets.find(CG_GLOVES);
+    if (glovesIt != cd.geosets.end() && glovesIt->second > 1)
+      cd.geosets[CG_SLEEVES] = 0;
+  }
 
   // If model is one of these races, show the feet (don't wear boots)
   cd.showFeet = infos.barefeet;
 
-  // Default geoset visibility, copied from wow.export (character-appearance.js):
+  // Default geoset visibility (per the character customization rules):
   // show geoset id 0, any geoset whose id ends in "01", and the whole face group
   // (32xx); hide eye-glow (17xx) and earrings (35xx). Customization and equipment
   // (cd.geosets, applied below) then override specific groups.
-  for (auto * g : geosets)
+  // Only the BASE character geosets get this rule. Merged collection-model geosets
+  // (DH horns = HeadAttach 2401, blindfold = DHBlindfolds 2501, etc.) are appended
+  // after rawGeosets and are controlled by refreshSkinnedModels -- applying the
+  // "*01" default rule to them would wrongly render those attachments.
+  for (size_t i = 0; i < rawGeosets.size() && i < geosets.size(); i++)
   {
+    auto * g = geosets[i];
     const QString idStr = QString::number(g->id);
     const bool isDefault = (g->id == 0 || idStr.endsWith("01") || idStr.startsWith("32"));
     const bool isHiddenDefault = idStr.startsWith("17") || idStr.startsWith("35");
-    g->display = isDefault && !isHiddenDefault;
+    // The tabard geoset group (CG_TABARD = 12, ids 12xx) is equipment-controlled: it
+    // must stay OFF unless a tabard is equipped (the cd.geosets/item pass below shows
+    // it via setGeosetGroupDisplay). Without this, the "*01" rule turns on the tabard
+    // mesh -- e.g. the Dracthyr drake's geoset 1201 -- with no tabard equipped.
+    const bool isEquipmentOnly = (g->id / 100 == CG_TABARD);
+    g->display = isDefault && !isHiddenDefault && !isEquipmentOnly;
   }
 
-  // Apply geoset overrides from customization + equipment
+  // Apply customization-choice geosets selectively: toggle only the exact
+  // geoset ids each active choice references (never narrowing a whole group), so
+  // shared body geometry such as the bare arms survives the default rule above.
+  cd.applyCustomizationGeosets();
+
+  // Apply equipment + special (ears/facial-hair/underwear) geoset groups. These
+  // are genuinely group-based (show variant N, hide the rest of the group) and
+  // run after customization so UI toggles (e.g. hide facial hair) win.
   for (auto geo : cd.geosets)
     setGeosetGroupDisplay((CharGeosets)geo.first, geo.second);
 
@@ -2587,15 +2945,11 @@ void WoWModel::refresh()
   // set replacable textures
   replaceTextures[TEXTURE_SKIN] = charTex;
 
-  // Eye Glow Geosets are ID 1701, 1702, etc.
-  const size_t egt = cd.eyeGlowType;
-  const int egtId = CG_EYEGLOW * 100 + egt + 1;   // CG_EYEGLOW = 17
-  for (size_t i = 0; i < rawGeosets.size(); i++)
-  {
-    const int id = geosets[i]->id;
-    if ((int)(id / 100) == CG_EYEGLOW)  // geosets 1700..1799
-      showGeoset(i, (id == egtId));
-  }
+  // Eye-glow geosets (1700..1799) are left hidden by the default rule above, to
+  // never render an eye-glow GEOSET (eye glow is done via
+  // an emissive material instead). Force-showing one here produced a fuzzy white
+  // halo around the eyes on every character; the coloured eyes themselves come
+  // from the Eyes geoset (3301) plus the eye texture, which are unaffected.
 
   // refresh merged models
   refreshMerging();

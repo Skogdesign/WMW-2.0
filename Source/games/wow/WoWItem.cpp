@@ -208,7 +208,8 @@ void WoWItem::unload()
     const auto m = mergedModel_;
     mergedModel_ = nullptr;
     charModel_->unmergeModel(m);
-    delete mergedModel_;
+    delete m; // not mergedModel_ (already nulled above) -- unmergeModel(WoWModel*)
+              // only erases + refreshes, so the model leaked every item swap.
   }
 }
 

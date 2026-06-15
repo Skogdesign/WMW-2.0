@@ -572,6 +572,14 @@ std::vector<std::string> WDC3File::get(unsigned int recordIndex, const core::Tab
         // newer build) cannot walk off the heap and crash.
         const char * bufStart = reinterpret_cast<const char *>(m_sectionData);
         const char * bufEnd = bufStart + m_sectionDataSize;
+        // For non-sparse tables the real strings live in the string block that
+        // follows the records (see parse: curPtr += recordSize * recordCount).
+        // A computed pointer that lands in the record region instead means a bad
+        // offset -- e.g. an unnamed choice whose Name_Lang offset resolves back
+        // into record data -- and must read as empty, not as garbage bytes.
+        const char * strStart = bufStart;
+        if (!m_isSparseTable)
+          strStart = bufStart + static_cast<size_t>(recordSize) * m_sectionHeader[0].record_count;
         char * stringPtr = nullptr;
 
         if (m_isSparseTable)
@@ -603,7 +611,7 @@ std::vector<std::string> WDC3File::get(unsigned int recordIndex, const core::Tab
         }
 
         const char * sp = reinterpret_cast<const char *>(stringPtr);
-        if (!sp || sp < bufStart || sp >= bufEnd)
+        if (!sp || sp < strStart || sp >= bufEnd)
         {
           result.push_back("");
         }

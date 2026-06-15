@@ -6,6 +6,8 @@
 
 #include "logger/Logger.h"
 
+#include <algorithm>
+
 #define DEBUG_RACEINFOS 1
 
 std::map<int, RaceInfos> RaceInfos::RACES;
@@ -16,7 +18,7 @@ void RaceInfos::init()
     GAMEDATABASE.sqlQuery("SELECT ChrRaces.ClientPrefix, ChrRaces.ID, ChrRaces.Flags, ChrModel.Sex, CreatureModelData.FileDataID, ChrModel.CharComponentTextureLayoutID, "
                           "ChrRaces.MaleModelFallbackRaceID, ChrRaces.MaleModelFallbackSex, ChrRaces.MaleTextureFallbackRaceID, ChrRaces.MaleTextureFallbackSex, "
                           "ChrRaces.FemaleModelFallbackRaceID, ChrRaces.FemaleModelFallbackSex, ChrRaces.FemaleTextureFallbackRaceID, ChrRaces.FemaleTextureFallbackSex, "
-                          "ChrRaceXChrModel.ChrModelID, ChrRaces.ClientFileString "
+                          "ChrRaceXChrModel.ChrModelID, ChrRaces.ClientFileString, ChrRaces.Name_lang "
                           "FROM ChrRaceXChrModel "
                           "LEFT JOIN ChrRaces ON ChrRaces.ID = ChrRaceXChrModel.ChrRacesID "
                           "LEFT JOIN ChrModel ON ChrModel.ID = ChrRaceXChrModel.ChrModelID "
@@ -61,6 +63,12 @@ void RaceInfos::init()
     // lowercased race directory name (matches the character/<race>/<sex>/ path)
     if (race.size() > 15)
       infos.clientFileString = race[15].toLower().toStdString();
+
+    // display name + playable/NPC classification (rule: Flags & 1 means
+    // NPC-only, except race 23 (Pandaren) and 75 which are forced playable)
+    if (race.size() > 16)
+      infos.nameLang = race[16].toStdString();
+    infos.isNPC = ((race[2].toInt() & 1) != 0) && infos.raceID != 23 && infos.raceID != 75;
 
     infos.isHD = GAMEDIRECTORY.getFile(modelfileid)->fullname().contains("_hd") ? true : false;
 
@@ -158,4 +166,45 @@ int RaceInfos::getFileIDForRaceSex(const int & race, const int & sex)
   }
 
   return -1;
+}
+
+std::vector<RaceInfos::RaceMenuEntry> RaceInfos::getRaceMenu()
+{
+  // collapse the per-(race,sex,model) RACES map into one entry per race, keeping
+  // the HD model FileDataID for each sex.
+  std::map<int, RaceMenuEntry> byRace;
+  for (const auto & kv : RACES)
+  {
+    const int fileID = kv.first;
+    const RaceInfos & r = kv.second;
+    if (r.raceID < 0)
+      continue;
+
+    RaceMenuEntry & e = byRace[r.raceID];
+    e.raceID = r.raceID;
+    e.isNPC = r.isNPC;
+    if (e.name.empty())
+      e.name = !r.nameLang.empty() ? r.nameLang : r.clientFileString;
+
+    if (r.sexID == GENDER_FEMALE)
+    {
+      if (e.femaleFileID < 0 || r.isHD)
+        e.femaleFileID = fileID;
+    }
+    else // treat anything else as male (covers GENDER_MALE / GENDER_NONE)
+    {
+      if (e.maleFileID < 0 || r.isHD)
+        e.maleFileID = fileID;
+    }
+  }
+
+  std::vector<RaceMenuEntry> out;
+  out.reserve(byRace.size());
+  for (auto & kv : byRace)
+    out.push_back(kv.second);
+
+  std::sort(out.begin(), out.end(),
+            [](const RaceMenuEntry & a, const RaceMenuEntry & b) { return a.name < b.name; });
+
+  return out;
 }

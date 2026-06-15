@@ -53,7 +53,12 @@ class QXmlStreamReader;
 #    define _WOWMODEL_API_
 #endif
 
-#define TEXTURE_MAX 32
+// Per-model texture-table size AND the merge-stride for merged models. This must be
+// >= the largest header.nTextures of any model loaded: modern M2s (War Within and
+// later, e.g. some void/cosmic creatures) declare more than the old limit of 32, and
+// writing textures[I]/specialTextures[I] past the array corrupted the heap (intermittent
+// 0xC0000374 crashes). The texture loop in initCommon also clamps to this as a safety net.
+#define TEXTURE_MAX 128
 
 class _WOWMODEL_API_ WoWModel : public ManagedItem, public Displayable, public Model, public Container<WoWItem>
 {
@@ -270,6 +275,7 @@ public:
   void hideAllGeosets();
   bool isGeosetDisplayed(uint geosetindex);
   void setGeosetGroupDisplay(CharGeosets group, int val);
+  void setGeosetDisplayById(int geosetId, bool display); // toggle the exact geoset id(s); never id 0
   void setCreatureGeosetData(std::set<GeosetNum> cgd);
 
   WoWModel* mergeModel(QString & name, int type = 1, bool noRefresh = false);

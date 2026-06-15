@@ -43,7 +43,7 @@
 
 // if you need extra qualification on software version, move this to 1
 # define _BETAVERSION 0
-# define _ALPHAVERSION 1
+# define _ALPHAVERSION 0
 #ifndef _BUILDNUMBER
   #define _BUILDNUMBER 0
 #endif
@@ -62,11 +62,11 @@ core::GlobalSettings * core::GlobalSettings::m_instance = 0;
 core::GlobalSettings::GlobalSettings()
 {
   m_versionMajorNumber = 0;
-  m_versionMinorNumber = 10;
+  m_versionMinorNumber = 1;
   m_versionRevNumber = 0;
 
-  m_appName = L"WoW Model Viewer";
-  m_buildName = L"Oribos";
+  m_appName = L"WoW Model Viewer Midnight";
+  m_buildName = L"Midnight";
 
  
   /*
@@ -107,8 +107,8 @@ core::GlobalSettings::GlobalSettings()
 
    */
 
-  // platform 
-  m_platform = L"Windows 32 bits";
+  // platform
+  m_platform = L"32 bits";
 
 #if _BETAVERSION > 0
   m_isBetaVersion = true;
@@ -143,7 +143,7 @@ std::wstring core::GlobalSettings::appVersion(std::wstring a_prefix)
   l_oss.precision(0);
 
   l_oss << m_versionMajorNumber << "." << m_versionMinorNumber << "."
-    << m_versionRevNumber << "." << _BUILDNUMBER;
+    << m_versionRevNumber;
   l_result += l_oss.str();
 
   return l_result;

@@ -86,6 +86,15 @@ namespace core
 
       bool isBeta() { return m_isBetaVersion; }
 
+      // Optional runtime override for the armory importer's proxy URL. The client
+      // holds NO Blizzard credentials; it calls a self-hosted proxy that does the
+      // OAuth + appearance fetch server-side. Normally the proxy URL is baked into
+      // the build; this lets a user override it without rebuilding (persisted in the
+      // app config, read by the Qt plugin). Returned by value so it crosses the
+      // core.dll / plugin.dll boundary safely. Empty -> use the built-in default.
+      std::string armoryProxyURL() const { return m_armoryProxyURL; }
+      void setArmoryProxyURL(const std::string & url) { m_armoryProxyURL = url; }
+
       // Members
       // find a better way than a lot of members...
       bool bShowParticle;
@@ -123,6 +132,8 @@ namespace core
       std::wstring m_appName;
       std::wstring m_buildName;
       std::wstring m_platform;
+
+      std::string m_armoryProxyURL;
 
       bool m_isBetaVersion;
       bool m_isAlphaVersion;

@@ -1,3 +1,5 @@
+// WoW Model Viewer Midnight resources. Icons are BMP-format .ico (small entries
+// must be BMP, not PNG, or wxICON/LoadIcon return a blank taskbar icon).
 MAINICON         ICON            "..\\..\\bin_support\\icons\\WMW-Midnight.ico"
 IDI_ICON1        ICON            "..\\..\\bin_support\\icons\\WMW-Midnight.ico"
 IDI_ICON2        ICON            "..\\..\\bin_support\\icons\\chrFile.ico"

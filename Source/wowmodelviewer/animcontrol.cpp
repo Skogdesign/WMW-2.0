@@ -576,8 +576,11 @@ bool AnimControl::UpdateCreatureModel(WoWModel *m)
       if (pci)
       {
         grp.particleColInd = pci;
-        QString pciquery = QString("SELECT StartColor1, MidColor1, EndColor1, "
-        "StartColor2, MidColor2, EndColor2, StartColor3, MidColor3, EndColor3 FROM ParticleColor "
+        // Column names in the modern ParticleColor DB2 are Start/Mid/End{1,2,3}
+        // (the old DBC used StartColor1/MidColor1/...). Ordered start,mid,end per set
+        // to match the {cols[0],cols[1],cols[2]} grouping below.
+        QString pciquery = QString("SELECT Start1, Mid1, End1, "
+        "Start2, Mid2, End2, Start3, Mid3, End3 FROM ParticleColor "
         "WHERE ID = %1;").arg(pci);
         sqlResult pcir = GAMEDATABASE.sqlQuery(pciquery);
         if(pcir.valid && !pcir.empty())
@@ -587,9 +590,19 @@ bool AnimControl::UpdateCreatureModel(WoWModel *m)
           {
             cols.push_back(fromARGB(pcir.values[0][j].toInt()));
           }
-          PCRList.push_back({ {cols[0],cols[1],cols[2]}, {cols[3],cols[4],cols[5]}, {cols[6],cols[7],cols[8]} });
-          grp.PCRIndex = numPCRs;
-          numPCRs++;
+          // Only build the 3x3 replacement set if all nine colours are present;
+          // indexing cols[0..8] blindly would read past the vector otherwise.
+          if (cols.size() >= 9)
+          {
+            PCRList.push_back({ {cols[0],cols[1],cols[2]}, {cols[3],cols[4],cols[5]}, {cols[6],cols[7],cols[8]} });
+            grp.PCRIndex = numPCRs;
+            numPCRs++;
+          }
+          else
+          {
+            LOG_ERROR << "ParticleColor" << pci << "returned" << (uint)cols.size() << "columns (need 9); skipping colour replacement.";
+            grp.PCRIndex = -1;
+          }
         }
       }
       else
@@ -766,8 +779,11 @@ bool AnimControl::UpdateItemModel(WoWModel *m)
       if (pci)
       {
         grp.particleColInd = pci;
-        QString pciquery = QString("SELECT StartColor1, MidColor1, EndColor1, "
-        "StartColor2, MidColor2, EndColor2, StartColor3, MidColor3, EndColor3 FROM ParticleColor "
+        // Column names in the modern ParticleColor DB2 are Start/Mid/End{1,2,3}
+        // (the old DBC used StartColor1/MidColor1/...). Ordered start,mid,end per set
+        // to match the {cols[0],cols[1],cols[2]} grouping below.
+        QString pciquery = QString("SELECT Start1, Mid1, End1, "
+        "Start2, Mid2, End2, Start3, Mid3, End3 FROM ParticleColor "
         "WHERE ID = %1;").arg(pci);
         sqlResult pcir = GAMEDATABASE.sqlQuery(pciquery);
         if(pcir.valid && !pcir.empty())
@@ -777,9 +793,19 @@ bool AnimControl::UpdateItemModel(WoWModel *m)
           {
             cols.push_back(fromARGB(pcir.values[0][j].toInt()));
           }
-          PCRList.push_back({ {cols[0],cols[1],cols[2]}, {cols[3],cols[4],cols[5]}, {cols[6],cols[7],cols[8]} });
-          grp.PCRIndex = numPCRs;
-          numPCRs++;
+          // Only build the 3x3 replacement set if all nine colours are present;
+          // indexing cols[0..8] blindly would read past the vector otherwise.
+          if (cols.size() >= 9)
+          {
+            PCRList.push_back({ {cols[0],cols[1],cols[2]}, {cols[3],cols[4],cols[5]}, {cols[6],cols[7],cols[8]} });
+            grp.PCRIndex = numPCRs;
+            numPCRs++;
+          }
+          else
+          {
+            LOG_ERROR << "ParticleColor" << pci << "returned" << (uint)cols.size() << "columns (need 9); skipping colour replacement.";
+            grp.PCRIndex = -1;
+          }
         }
       }
       else

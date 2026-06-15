@@ -16,17 +16,26 @@
 #define Rel "..\build\Source\wowmodelviewer\Release"
 #define IconsDir "..\bin_support\Icons"
 
+#define MyAppURL "https://github.com/Skogdesign/WMW-2.0"
+
 [Setup]
 AppId={{B7E9F3A2-1C4D-4E8A-9F6B-2A3C5D7E9F10}
 AppName={#MyAppName}
 AppVersion={#MyAppVersion}
+AppVerName={#MyAppName} {#MyAppVersion}
 AppPublisher={#MyAppPublisher}
+AppPublisherURL={#MyAppURL}
+AppSupportURL={#MyAppURL}/issues
+AppUpdatesURL={#MyAppURL}/releases
+VersionInfoVersion={#MyAppVersion}
+VersionInfoProductVersion={#MyAppVersion}
 DefaultDirName={autopf}\WoW Model Viewer Midnight
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
 OutputDir=dist
-OutputBaseFilename=WoWModelViewerMidnight-Setup
+; versioned output so each release has a distinct asset name
+OutputBaseFilename=WoWModelViewerMidnight-Setup-{#MyAppVersion}
 SetupIconFile={#IconsDir}\WMW-Midnight.ico
 UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2

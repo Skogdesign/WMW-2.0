@@ -350,6 +350,15 @@ Attachment* ModelCanvas::LoadModel(GameFile * file)
   delete wmo;
   wmo = nullptr;
 
+  // Free the previously displayed model. clearAttachments()/setModel(nullptr) only
+  // detach it and delete the Attachment wrappers -- the WoWModel itself was never
+  // freed, so every model switch leaked the whole model + its textures/geometry,
+  // eventually exhausting the 32-bit address space (OOM crash). Deleting it here is
+  // safe now that it's detached and the merge path no longer shares its geoset/pass
+  // pointers (see refreshMerging). delete on nullptr (first load) is a no-op.
+  delete model_;
+  model_ = nullptr;
+
   // Create new one
   model_ = new WoWModel(file, true);
   if (!model_->ok)

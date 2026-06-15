@@ -99,11 +99,21 @@ void Observable::detach(Observer * observer)
 //--------------------------------------------------------------------
 void Observable::notify(Event & event)
 {
-  std::list<Observer *>::iterator l_it;
+  // An observer's handler may attach, detach or destroy observers while we are still
+  // delivering this event -- e.g. CharDetailsFrame::onEvent() rebuilds the whole
+  // customization panel on a DH-mode change, which destroys every CharDetails
+  // CustomizationChoice control (each detaches itself here) and creates new ones.
+  // Iterating m_observerList directly would then invalidate the iterator mid-loop and
+  // dereference a freed observer -> use-after-free (a crash with a garbage 'this').
+  // Iterate over a SNAPSHOT, and before delivering re-check that the observer is still
+  // attached, so an observer detached/destroyed earlier in this same notification is
+  // skipped instead of called through a dangling pointer.
+  const std::list<Observer *> snapshot = m_observerList;
 
-  for(l_it = m_observerList.begin() ; l_it != m_observerList.end() ; l_it++)
+  for (Observer * obs : snapshot)
   {
-    (*l_it)->treatEvent(&event);
+    if (observerAttached(obs) != m_observerList.end())
+      obs->treatEvent(&event);
   }
 }
 

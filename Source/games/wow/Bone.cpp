@@ -57,7 +57,12 @@ void Bone::calcMatrix(std::vector<Bone> & allbones, ssize_t anim, size_t time, b
 
   }
 
-  if (parent > -1) 
+  // Guard the upper bound too: an out-of-range parent (from a malformed/modern rig)
+  // would otherwise make allbones[parent] reference - and calcMatrix() WRITE - memory
+  // past the end of the bones[] vector every frame, corrupting the adjacent heap
+  // allocation. Parents are normally sanitized at load (WoWModel::initAnimated); this
+  // is defence-in-depth for any path that didn't go through it.
+  if (parent > -1 && parent < (int)allbones.size())
   {
     allbones[parent].calcMatrix(allbones, anim, time, rotate);
     mat = allbones[parent].mat * m;
@@ -68,9 +73,9 @@ void Bone::calcMatrix(std::vector<Bone> & allbones, ssize_t anim, size_t time, b
   }
 
   // transform matrix for normal vectors ... ??
-  if (rot.uses(anim) && rotate) 
+  if (rot.uses(anim) && rotate)
   {
-    if (parent>=0)
+    if (parent >= 0 && parent < (int)allbones.size())
       mrot = allbones[parent].mrot * glm::toMat4(q);
     else
       mrot = glm::toMat4(q);

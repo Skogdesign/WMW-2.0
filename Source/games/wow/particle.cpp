@@ -72,7 +72,19 @@ void ParticleSystem::init(GameFile * f, M2ParticleDef &mta, std::vector<uint32> 
   //order = mta.s2;
   order = ParticleType > 0 ? -1 : 0;
 
-  parent = &(model->bones[mta.bone]);
+  // Clamp the file-supplied bone index: an out-of-range value would make 'parent' a
+  // wild pointer that is dereferenced every frame (parent->mat, etc.). Attach to the
+  // root bone (0) instead. (The bones[] parents themselves are sanitized at load.)
+  {
+    int boneIdx = mta.bone;
+    if (boneIdx < 0 || (size_t)boneIdx >= model->bones.size())
+    {
+      LOG_ERROR << "ParticleSystem bone index" << (int)mta.bone << "out of range (bones="
+                << model->bones.size() << "); attaching to root.";
+      boneIdx = 0;
+    }
+    parent = &(model->bones[boneIdx]);
+  }
 
   // transform = flags & 1024;
 
@@ -734,7 +746,10 @@ void RibbonEmitter::init(GameFile * f, ModelRibbonEmitterDef &mta, std::vector<u
   above.init(mta.above, f, globals);
   below.init(mta.below, f, globals);
 
-  parent = &(model->bones[mta.bone]);
+  // Clamp the file-supplied bone index: an out-of-range value would make 'parent' a
+  // wild pointer that is dereferenced every frame (parent->mat, etc.). Attach to the
+  // root bone (0) instead. (The bones[] parents themselves are sanitized at load.)
+  parent = &(model->bones[(mta.bone >= 0 && (size_t)mta.bone < model->bones.size()) ? mta.bone : 0]);
   int *texlist = (int*)(f->getBuffer() + mta.ofsTextures);
   // just use the first texture for now; most models I've checked only had one
   texture = model->getGLTexture(texlist[0]);

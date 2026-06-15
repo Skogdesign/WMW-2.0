@@ -172,35 +172,33 @@ bool WowModelViewApp::OnInit()
   */
   frame->Show(true);
 
-  // Set the icon, different source location for the icon under Linux & Mac
-  wxIcon *icon;
+  // Set the window + taskbar icon. The classic icon API (wxICON/LoadIcon/LoadImage)
+  // cannot load the embedded .ico on this build, so the window icon came up blank.
+  // Instead build the icon from the ICON3 PNG resource (which loads via wx's own PNG
+  // handler), at the exact big/small sizes, and apply it with WM_SETICON. The wxIcons
+  // are static so the HICONs they own stay valid for the window's lifetime.
 #if defined (_WINDOWS)
-  icon = new wxICON("MAINICON");
-  if (!icon->Ok())
   {
-    wxBitmap * bitmap = createBitmapFromResource(L"ICON3");
-    if (!bitmap) {
-      wxMessageBox(wxT("Failed to load bitmap"), wxT("Failure"));
-    }
-    else {
-      icon->CopyFromBitmap(*bitmap);
-      if (!icon->Ok()) {
-        if (icon->LoadFile(L"ICON3", wxBITMAP_TYPE_PNG_RESOURCE) == false)
-          wxMessageBox(wxT("Failed to load Icon"), wxT("Failure"));
+    static wxIcon s_iconBig, s_iconSmall;
+    wxBitmap * bmp = createBitmapFromResource(L"ICON3");
+    if (bmp && bmp->IsOk())
+    {
+      const wxImage img = bmp->ConvertToImage();
+      s_iconBig.CopyFromBitmap(wxBitmap(img.Scale(::GetSystemMetrics(SM_CXICON), ::GetSystemMetrics(SM_CYICON), wxIMAGE_QUALITY_HIGH)));
+      s_iconSmall.CopyFromBitmap(wxBitmap(img.Scale(::GetSystemMetrics(SM_CXSMICON), ::GetSystemMetrics(SM_CYSMICON), wxIMAGE_QUALITY_HIGH)));
+      HWND hwnd = (HWND) frame->GetHandle();
+      if (s_iconBig.IsOk())
+      {
+        ::SendMessageW(hwnd, WM_SETICON, ICON_BIG, (LPARAM) s_iconBig.GetHICON());
+        frame->SetIcon(s_iconBig); // title bar + wx-internal
       }
+      if (s_iconSmall.IsOk())
+        ::SendMessageW(hwnd, WM_SETICON, ICON_SMALL, (LPARAM) s_iconSmall.GetHICON());
     }
+    else
+      LOG_ERROR << "Failed to load ICON3 resource -- application icon not set";
   }
-  //
-#elif defined (_LINUX)
-  // This probably needs to be fixed...
-  //if (icon->LoadFile(wxT("../bin_support/icon/wmv_xpm")) == false)
-  //  wxMessageBox(wxT("Failed to load Icon"),wxT("Failure"));
-#elif defined (_MAC)
-  // Dunno what to do about Macs...
-  //if (icon->LoadFile(wxT("../bin_support/icon/wmv.icns")) == false)
-  //  wxMessageBox(wxT("Failed to load Icon"),wxT("Failure"));
 #endif
-  frame->SetIcon(*icon);
   // --
 
   // Point our global vars at the correct memory location

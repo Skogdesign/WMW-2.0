@@ -207,6 +207,11 @@ private:
   // untextured (white). Mirrors the in-game texture-gating behaviour.
   void autoSelectTextureGating(uint chrCustomizationChoiceID);
   bool autoSelectInProgress_ = false;
+
+  // When true, set() applies the choice but skips the expensive model_->refresh()
+  // (texture re-composite + skinned-model reload + geoset merge). randomise() uses
+  // this to apply all ~45 options and refresh ONCE at the end instead of per option.
+  bool batchUpdate_ = false;
   std::map<uint, CustomizationElements> customizationElementsPerOption_; // keep track of current elements applied for a given option
   std::vector<std::pair<uint, std::pair<uint, uint> > > models_; // vector < pair < GameFileId, pair <GeosetType, GeosetID> > >
 

@@ -171,8 +171,21 @@ void CharDetails::randomise()
 {
   // Pick a random AVAILABLE choice for every customization option. isChoiceAvailable
   // keeps the result valid for this character (e.g. a non-Demon-Hunter never
-  // randomises into DH-only horns/blindfold). set() applies each choice + refreshes.
-  for (const auto & c : choicesPerOptionMap_)
+  // randomises into DH-only horns/blindfold).
+  //
+  // Batch the apply: set() normally calls the expensive model_->refresh() (texture
+  // re-composite + skinned-model reload + geoset merge) every time, so randomising all
+  // ~45 Dracthyr options used to refresh ~45 times and took several seconds. With
+  // batchUpdate_ each set() only records the choice; we refresh ONCE at the end.
+  if (!model_)
+    return;
+
+  // Snapshot the options first: set() can modify choicesPerOptionMap_ (child options),
+  // so iterate a stable copy rather than the live map.
+  const std::vector<std::pair<uint, std::vector<uint> > > opts(choicesPerOptionMap_.begin(), choicesPerOptionMap_.end());
+
+  batchUpdate_ = true;
+  for (const auto & c : opts)
   {
     std::vector<uint> avail;
     for (const uint choiceID : c.second)
@@ -182,6 +195,9 @@ void CharDetails::randomise()
     if (!avail.empty())
       set(c.first, avail[randint(0, static_cast<int>(avail.size()) - 1)]);
   }
+  batchUpdate_ = false;
+
+  model_->refresh(); // single refresh for the whole randomised set
 }
 
 void CharDetails::setDemonHunterMode(bool val)
@@ -289,12 +305,24 @@ bool CharDetails::isChoiceAvailable(uint chrCustomizationChoiceID) const
   if (raceMask == 0xFFFFFFFFll)
     return false;
   // Otherwise this character's race must actually be present in the mask (0 = no race
-  // restriction). This also drops choices whose curated mask simply doesn't include us.
+  // restriction). IMPORTANT: a mask with all 32 low (classic-race) bits set is a
+  // BROAD "applies to everyone" mask -- e.g. the Dracthyr dragon's choices use
+  // 0x...FFFFFFFF plus a few high allied-race bits, and their own race bit (52/70) is
+  // NOT set. Race-filtering those wiped out every choice for the Dracthyr dragon (a
+  // shared ChrModel), leaving it completely uncustomisable. So only a NARROW,
+  // genuinely race-specific mask drops choices, and only for races representable in a
+  // 64-bit mask (race id <= 64 -- avoids the undefined 1ull << 69 for race 70).
   if (raceMask != 0 && model_ && model_->infos.raceID > 0)
   {
-    const unsigned long long raceBit = 1ull << (model_->infos.raceID - 1);
-    if ((static_cast<unsigned long long>(raceMask) & raceBit) == 0)
-      return false;
+    const unsigned long long m = static_cast<unsigned long long>(raceMask);
+    const bool broad = (m & 0xFFFFFFFFull) == 0xFFFFFFFFull; // all classic races -> broadly applicable
+    const int rid = model_->infos.raceID;
+    if (!broad && rid >= 1 && rid <= 64)
+    {
+      const unsigned long long raceBit = 1ull << (rid - 1);
+      if ((m & raceBit) == 0)
+        return false;
+    }
   }
 
   // ChrCustomizationReq.ClassMask is an int32 class bitmask (class N => bit N-1).
@@ -384,15 +412,18 @@ void CharDetails::set(uint chrCustomizationOptionID, uint chrCustomizationChoice
   currentCustomization_[chrCustomizationOptionID] = chrCustomizationChoiceID;
   customizationElementsPerOption_.erase(chrCustomizationOptionID);
 
-  LOG_INFO << __FUNCTION__ << chrCustomizationOptionID << chrCustomizationChoiceID;
   const auto parentOptions = getParentOptions(chrCustomizationOptionID);
   const auto childOption = getChildOption(chrCustomizationOptionID);
 
-  LOG_INFO << "Parent options for" << chrCustomizationOptionID;
-  for (const auto &opt : parentOptions)
-    LOG_INFO << "\t" << opt;
-  LOG_INFO << "Child option for" << chrCustomizationOptionID;
+  if (!batchUpdate_) // skip the verbose per-option logging during a batch (randomise)
+  {
+    LOG_INFO << __FUNCTION__ << chrCustomizationOptionID << chrCustomizationChoiceID;
+    LOG_INFO << "Parent options for" << chrCustomizationOptionID;
+    for (const auto &opt : parentOptions)
+      LOG_INFO << "\t" << opt;
+    LOG_INFO << "Child option for" << chrCustomizationOptionID;
     LOG_INFO << "\t" << childOption;
+  }
 
   auto choiceId = chrCustomizationChoiceID;
   auto relatedChoiceId = 0;
@@ -466,7 +497,9 @@ void CharDetails::set(uint chrCustomizationOptionID, uint chrCustomizationChoice
   event.setCustomizationOptionId(chrCustomizationOptionID);
   notify(event);
 
-  model_->refresh();
+  // During a batch (randomise) skip the heavy refresh; the caller refreshes once.
+  if (!batchUpdate_)
+    model_->refresh();
  // TEXTUREMANAGER.dump();
 }
 

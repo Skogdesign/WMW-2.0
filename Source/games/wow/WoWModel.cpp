@@ -1569,13 +1569,22 @@ void WoWModel::setLOD(int index)
 
     uint texOffset = 0;
     uint texCount = Tex[j].op_count;
+    if (texCount > 4) texCount = 4; // combiner arrays (uvSource[4], tex2..tex4) hold at most 4
+
+    // Bounds-checked lookups: textureid + k indexes texlookup[] (size header.nTexLookup)
+    // and its result indexes specialTextures[] -- guard both so a malformed multi-texture
+    // unit can't over-read past those buffers (the +k accesses are new with the combiner).
+    const uint nTexLk = (uint)header.nTexLookup;
+    auto texLk = [&](uint idx) -> uint16 { return (idx < nTexLk) ? texlookup[idx] : (uint16)0; };
+    auto specialAt = [&](uint16 t) -> int { return (t < specialTextures.size()) ? specialTextures[t] : -1; };
+
     // For single-texture units we keep the legacy behaviour of preferring a special
     // skin texture (11/12/13) when present. Multi-texture units are instead combined in
     // their natural order by the GLSL combiner (see below).
-    pass->specialTex = specialTextures[texlookup[Tex[j].textureid]];
+    pass->specialTex = specialAt(texLk(Tex[j].textureid));
     for (size_t k = 0; k < texCount; k++)
     {
-      int special = specialTextures[texlookup[Tex[j].textureid + k]];
+      int special = specialAt(texLk(Tex[j].textureid + (uint)k));
       if (special == 11 || special == 12 || special == 13)
       {
         texOffset = k;
@@ -1597,12 +1606,12 @@ void WoWModel::setLOD(int index)
       pass->vertexShader = vertexShaderNameToId(vsName);
       uvSourceForVSName(vsName, pass->uvSource);
 
-      pass->tex2 = texlookup[Tex[j].textureid + 1];
-      pass->tex3 = (texCount > 2) ? texlookup[Tex[j].textureid + 2] : ModelRenderPass::INVALID_TEX;
-      pass->tex4 = (texCount > 3) ? texlookup[Tex[j].textureid + 3] : ModelRenderPass::INVALID_TEX;
+      pass->tex2 = texLk(Tex[j].textureid + 1);
+      pass->tex3 = (texCount > 2) ? texLk(Tex[j].textureid + 2) : ModelRenderPass::INVALID_TEX;
+      pass->tex4 = (texCount > 3) ? texLk(Tex[j].textureid + 3) : ModelRenderPass::INVALID_TEX;
     }
 
-    pass->tex = texlookup[Tex[j].textureid + texOffset];
+    pass->tex = texLk(Tex[j].textureid + texOffset);
 
     // TODO: figure out these flags properly -_-
     ModelRenderFlags &rf = renderFlags[Tex[j].flagsIndex];
@@ -1909,8 +1918,21 @@ void WoWModel::animate(ssize_t Anim)
       {
         if (ov_it->weights[b] > 0)
         {
-          glm::vec3 tv = glm::vec3(bones[ov_it->bones[b]].mat * glm::vec4(ov_it->pos, 1.0f));
-          glm::vec3 tn = glm::vec3(bones[ov_it->bones[b]].mrot * glm::vec4(ov_it->normal, 1.0f));
+          // The per-vertex bone index is a uint8 read verbatim from the M2. For modern
+          // skeleton-file (SKB1) creatures, bones is sized to the parent skeleton's bone
+          // count, which need not cover the vertex bone-index space -- an out-of-range
+          // index here read a Bone (~128 bytes) past the bones[] allocation every frame,
+          // the intermittent heap over-read / access violation. Clamp like the keyBone,
+          // bone-parent and particle-bone indices already are.
+          const size_t bi = ov_it->bones[b];
+          if (bi >= bones.size())
+          {
+            static bool warned = false;
+            if (!warned) { warned = true; LOG_ERROR << "Vertex bone index" << (uint)bi << ">= bone count" << bones.size() << "-- skipping (out-of-range skin weight)"; }
+            continue;
+          }
+          glm::vec3 tv = glm::vec3(bones[bi].mat * glm::vec4(ov_it->pos, 1.0f));
+          glm::vec3 tn = glm::vec3(bones[bi].mrot * glm::vec4(ov_it->normal, 1.0f));
           v += tv * ((float)ov_it->weights[b] / 255.0f);
           n += tn * ((float)ov_it->weights[b] / 255.0f);
         }
@@ -1932,7 +1954,9 @@ void WoWModel::animate(ssize_t Anim)
 
   for (uint i = 0; i < lights.size(); i++)
   {
-    if (lights[i].parent >= 0)
+    // parent is file-supplied; bound it against bones.size() (same as the keyBone /
+    // bone-parent / vertex-skin clamps) to avoid an out-of-range Bone read each frame.
+    if (lights[i].parent >= 0 && lights[i].parent < (int)bones.size())
     {
       lights[i].tpos = glm::vec3(bones[lights[i].parent].mat * glm::vec4(lights[i].pos, 1.0f));
       lights[i].tdir = glm::vec3(bones[lights[i].parent].mrot * glm::vec4(lights[i].dir, 1.0f));
@@ -2970,8 +2994,13 @@ GLuint WoWModel::getGLTexture(uint16 Tex) const
 
   if (specialTextures[Tex] == -1)
     return textures[Tex];
-  else
-    return replaceTextures[specialTextures[Tex]];
+
+  // specialTextures[Tex] indexes replaceTextures[]; for merged models it can carry a
+  // value beyond replaceTextures.size() (it + mergeIndex*TEXTURE_MAX), so bound it.
+  const int s = specialTextures[Tex];
+  if (s < 0 || (size_t)s >= replaceTextures.size())
+    return ModelRenderPass::INVALID_TEX;
+  return replaceTextures[s];
 }
 
 void WoWModel::restoreRawGeosets()

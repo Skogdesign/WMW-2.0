@@ -422,7 +422,7 @@ void ParticleSystem::draw()
 
   for (ParticleList::iterator it = particles.begin(); it != particles.end(); ++it)
   {
-    if (tiles.size() - 1 < it->tile) // Alfred, 2009.08.07, error prevent
+    if (it->tile >= tiles.size()) // bounds guard (tiles.size()-1 underflows when tiles is empty)
       break;
     glColor4fv(glm::value_ptr(it->color));
     size = it->size;

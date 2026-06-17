@@ -50,7 +50,7 @@ bool core::GameDatabase::initFromXML(const QString & file)
      // Cache key = WoW build + our schema version. Bump SCHEMA_VERSION whenever the
      // table layout in database.xml (or how we read it) changes, so an old cache
      // built with a different schema is rebuilt rather than queried and failing.
-     static const int SCHEMA_VERSION = 7; // 7: DBD position-refresh falls back to nearest layout for builds newer than the bundled defs
+     static const int SCHEMA_VERSION = 8; // 8: reverted the DBD nearest-build fallback (it mis-read some tables); base database.xml positions are authoritative for 12.x
      const QString build = GAMEDIRECTORY.version(); // current WoW build, e.g. "12.0.1.66220"
      buildVersion = build.isEmpty() ? QString() : (build + "|schema" + QString::number(SCHEMA_VERSION));
 

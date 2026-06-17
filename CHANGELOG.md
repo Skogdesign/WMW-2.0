@@ -81,8 +81,6 @@ Format loosely based on [Keep a Changelog](https://keepachangelog.com/).
   so the heavy ~130k-file filter + tree rebuild runs once you pause, not on every keystroke,
   and only once the term is 3+ characters (an empty box restores the default tree; Enter still
   forces a search at any length).
-
-### Changed
 - **Database field positions adapt to client builds newer than the bundled definitions.** WMV
   refreshes each table's DB2 field positions from WoWDBDefs for the loaded build; if the exact
   build wasn't listed (Blizzard ships patches faster than the defs update), it fell back to the

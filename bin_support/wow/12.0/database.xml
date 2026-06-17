@@ -105,12 +105,14 @@
     <field type="int32" name="SwatchColor" arraySize="2" pos="10" />
   </table>
   <table name="ChrCustomizationReq">
-    <!-- ID is noninline (id-list), so data fields start at 0. Positions are the
-         12.0.5 layout (216BEF26) fallback; refreshStructures refreshes them per
-         build from ChrCustomizationReq.dbd. -->
-    <field type="int32" name="ID" primary="yes" pos="2" />
-    <field type="int64" name="RaceMask" pos="0" />
-    <field type="int32" name="ClassMask" pos="3" />
+    <!-- ID is noninline (id-list), so record fields start at index 0. Positions are
+         the 12.0.7 layout CA154412 (build 68235): ClassMask is field index 3 -> pos 2,
+         and RaceMask is the RaceMasks<32>[2] field at DBD index 9 -> pos 8 (read as a
+         64-bit mask). The old 12.0.5 (216BEF26) positions (RaceMask=0, ClassMask=3) read
+         a string offset as RaceMask -> garbage race-gating -> wrong customization choices. -->
+    <field type="int32" name="ID" primary="yes" />
+    <field type="int64" name="RaceMask" pos="8" />
+    <field type="int32" name="ClassMask" pos="2" />
   </table>
   <table name="ChrCustomizationElement">
     <field type="int32" name="ID" primary="yes" />

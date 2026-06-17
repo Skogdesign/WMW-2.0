@@ -10,7 +10,7 @@
 ; Output:   installer\dist\WoWModelViewerMidnight-Setup.exe
 
 #define MyAppName "WoW Model Viewer Midnight"
-#define MyAppVersion "0.2.1"
+#define MyAppVersion "0.2.2"
 #define MyAppPublisher "Skogdesign"
 #define MyAppExeName "wowmodelviewer.exe"
 #define Rel "..\build\Source\wowmodelviewer\Release"
@@ -64,6 +64,10 @@ Source: "{#Rel}\plugins\*"; DestDir: "{app}\plugins"; Flags: ignoreversion recur
 Source: "{#Rel}\platforms\*"; DestDir: "{app}\platforms"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#Rel}\imageformats\*"; DestDir: "{app}\imageformats"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#Rel}\games\*"; DestDir: "{app}\games"; Flags: ignoreversion recursesubdirs createallsubdirs
+; The 12.0 schema/data is maintained in the tracked bin_support\ tree. Ship it explicitly AFTER
+; the build-staging games\* above (so it overrides) -- otherwise the installer can pick up a stale
+; build-staging copy of database.xml, which silently breaks characters/races on a fresh install.
+Source: "..\bin_support\wow\12.0\*"; DestDir: "{app}\games\wow\12.0"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#Rel}\dbd\*"; DestDir: "{app}\dbd"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]

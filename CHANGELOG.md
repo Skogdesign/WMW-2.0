@@ -3,6 +3,22 @@
 All notable changes to **WoW Model Viewer: Midnight** are recorded here.
 Format loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.2.2] — 2026-06-17
+
+Packaging hotfix for 0.2.1. The 0.2.1 **installer** shipped a stale build-staging copy of the
+12.0 `database.xml`, so the character/race/creature fixes from 0.2.1 never reached an actual
+install — a fresh install built its database cache from the old field positions and came up with
+an empty Characters race tree and broken character customization, even though the source was
+correct. 0.2.2 makes the installer ship the 12.0 schema straight from the tracked source, and
+bumps the database-cache version so the corrected schema also takes effect when installing over
+a prior build (which would otherwise reuse the old cache).
+
+### Fixed
+- **Installs now actually get the 0.2.1 fixes.** The installer sources the 12.0 schema from the
+  tracked `bin_support\` tree instead of the build-staging dir, so it can't ship stale positions;
+  and the cache schema version is bumped so an existing (broken) cache is rebuilt on upgrade.
+
+
 ## [0.2.1] — 2026-06-17
 
 Hotfix for the current retail client (**12.0.7.68235**), whose database layout is newer

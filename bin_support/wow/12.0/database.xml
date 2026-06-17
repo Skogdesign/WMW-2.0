@@ -216,7 +216,7 @@
   <table name="CreatureModelData">
     <field type="int32" name="ID" primary="yes" />
     <field type="uint32" name="FileDataID" pos="2" />
-    <field type="uint32" name="CreatureGeosetDataID" pos="16" />
+    <field type="uint32" name="CreatureGeosetDataID" pos="18" />
   </table>
   
   <!-- Creature tables - END -->

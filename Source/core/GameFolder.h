@@ -10,6 +10,7 @@
 
 #include <map>
 #include <set>
+#include <functional>
 
 #include "GameFile.h"
 
@@ -70,6 +71,13 @@ namespace core
       virtual void onChildRemoved(GameFile *) override;
 
       QString path() { return m_path; }
+
+      // Optional progress callback (fraction 0..1), invoked while building the file list from
+      // the listfile -- the longest startup step -- so the loading UI can advance during it.
+      void setLoadProgressCallback(const std::function<void(float)> & cb) { m_loadProgressCb = cb; }
+
+    protected:
+      std::function<void(float)> m_loadProgressCb;
 
     private:
       std::map<QString, GameFile *> m_nameMap;

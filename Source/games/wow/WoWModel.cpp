@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <cstring>
 #include <sstream>
 #include <string>
@@ -182,6 +183,12 @@ gamefile(file)
 
 WoWModel::~WoWModel()
 {
+  // Free any models held in the re-merge cache (these are NOT in mergedModels, so the
+  // merge cleanup below won't reach them).
+  for (auto & entry : mergedModelCache)
+    delete entry.second;
+  mergedModelCache.clear();
+
   if (ok)
   {
     if (attachment)
@@ -2557,6 +2564,20 @@ WoWModel* WoWModel::mergeModel(uint fileID, int type, bool noRefresh)
   if(it != mergedModels.end())
     return *it;
 
+  // Reuse a previously-unmerged instance for this file instead of re-reading the M2
+  // from CASC (parse + GPU upload). refreshMerging() rebuilds working state from raw,
+  // so a cached re-merge is equivalent to a fresh load but far cheaper.
+  {
+    auto cit = mergedModelCache.find(fileID);
+    if (cit != mergedModelCache.end())
+    {
+      WoWModel * cached = cit->second;
+      mergedModelCache.erase(cit);
+      cached->mergedModelType = type;
+      return mergeModel(cached, type, noRefresh);
+    }
+  }
+
   WoWModel * m = new WoWModel(GAMEDIRECTORY.getFile(fileID), true);
 
   if (!m->ok)
@@ -2803,7 +2824,7 @@ void WoWModel::refreshMerging()
   }
 }
 
-void WoWModel::unmergeModel(QString & name)
+void WoWModel::unmergeModel(QString & name, bool noRefresh)
 {
   LOG_INFO << __FUNCTION__ << name;
   auto it = std::find_if(std::begin(mergedModels),
@@ -2813,12 +2834,12 @@ void WoWModel::unmergeModel(QString & name)
   if (it != mergedModels.end())
   {
     WoWModel * m = *it;
-    unmergeModel(m);
-    delete m;
+    unmergeModel(m, noRefresh);
+    poolMergedModel(m);
   }
 }
 
-void WoWModel::unmergeModel(uint fileID)
+void WoWModel::unmergeModel(uint fileID, bool noRefresh)
 {
   LOG_INFO << __FUNCTION__ << fileID;
   auto it = std::find_if(std::begin(mergedModels),
@@ -2828,21 +2849,56 @@ void WoWModel::unmergeModel(uint fileID)
   if (it != mergedModels.end())
   {
     WoWModel * m = *it;
-    unmergeModel(m);
-    delete m;
+    unmergeModel(m, noRefresh);
+    poolMergedModel(m);
   }
 }
 
-void WoWModel::unmergeModel(WoWModel * m)
+void WoWModel::unmergeModel(WoWModel * m, bool noRefresh)
 {
   LOG_INFO << __FUNCTION__ << m->name();
   mergedModels.erase(m);
-  refreshMerging();
+  if (!noRefresh)
+    refreshMerging();
+}
+
+void WoWModel::poolMergedModel(WoWModel * m)
+{
+  if (!m)
+    return;
+
+  const uint fileID = m->gamefile ? m->gamefile->fileDataId() : 0;
+  // Can't key it for reuse -> free it now rather than leak.
+  if (fileID == 0)
+  {
+    delete m;
+    return;
+  }
+
+  // Already have an instance cached for this file -> keep one, free the duplicate.
+  if (mergedModelCache.find(fileID) != mergedModelCache.end())
+  {
+    delete m;
+    return;
+  }
+
+  // Bound the cache so a long session of trying many models doesn't grow without limit.
+  const size_t MAX_CACHED = 24;
+  if (mergedModelCache.size() >= MAX_CACHED)
+  {
+    auto victim = mergedModelCache.begin();
+    delete victim->second;
+    mergedModelCache.erase(victim);
+  }
+
+  mergedModelCache[fileID] = m;
 }
 
 
 void WoWModel::refresh()
 {
+  const auto refreshStart = std::chrono::steady_clock::now();
+
   // apply chardetails customization
   cd.refresh();
 
@@ -2977,6 +3033,11 @@ void WoWModel::refresh()
 
   // refresh merged models
   refreshMerging();
+
+  const auto refreshMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                           std::chrono::steady_clock::now() - refreshStart).count();
+  LOG_INFO << "WoWModel::refresh took " << refreshMs << " ms (merge cache holds "
+           << (uint)mergedModelCache.size() << " model(s))";
 }
 
 QString WoWModel::getNameForTex(uint16 Tex)

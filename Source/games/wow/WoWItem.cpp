@@ -207,9 +207,14 @@ void WoWItem::unload()
     // need to find a better way to solve this
     const auto m = mergedModel_;
     mergedModel_ = nullptr;
-    charModel_->unmergeModel(m);
+    // noRefresh=true: every unload() runs from setId()/load(), and in every UI and import
+    // path that is immediately followed by a full WoWModel::refresh() (RefreshModel /
+    // UpdateControls), whose final refreshMerging() rebuilds ALL merged geometry from raw.
+    // Letting unmergeModel() refresh here too meant a full geometry rebuild per item swap
+    // that the very next refresh() threw away -- so skip it (no paint happens in between).
+    charModel_->unmergeModel(m, true);
     delete m; // not mergedModel_ (already nulled above) -- unmergeModel(WoWModel*)
-              // only erases + refreshes, so the model leaked every item swap.
+              // only erases (no refresh now), so the model leaked every item swap.
   }
 }
 

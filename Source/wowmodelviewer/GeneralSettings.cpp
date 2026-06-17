@@ -90,10 +90,9 @@ GeneralSettings::GeneralSettings(wxWindow* parent, wxWindowID id)
   top->Add(new wxStaticText(this, wxID_ANY, _("Proxy URL (optional)"), wxDefaultPosition, wxDefaultSize, 0), 0, wxLEFT | wxRIGHT, 5);
   top->Add(armoryProxyURLCtrl, 0, wxALL, 5);
   wxStaticText *armoryMsg = new wxStaticText(this, wxID_ANY,
-                                             _("Character import uses a proxy that talks to the Blizzard API for you, so you "
-                                               L"don't need any credentials. This build has a default proxy built in; leave this "
-                                               L"blank to use it. Advanced: override it with your own proxy URL "
-                                               L"(template: ...?region=%s&realm=%s&character=%s) and click Apply."),
+                                             _("Character import works out of the box via a built-in proxy, so you don't need "
+                                               L"any setup or credentials. Leave this blank unless you want to point it at a "
+                                               L"different proxy (Advanced) -- then paste the URL here and click Apply."),
                                              wxDefaultPosition, wxDefaultSize, 0);
   armoryMsg->Wrap(350);
   top->Add(armoryMsg, 0, wxALL, 5);

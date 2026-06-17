@@ -44,6 +44,12 @@ WMO::WMO(QString name) :
   doodadset = -1;
   includeDefaultDoodads = true;
 
+  // Default the header counts to 0. They are only assigned by the MOHD chunk; a file WITHOUT
+  // one (a WMO *group* file like "<name>_000.wmo", which shares the .wmo extension and shows
+  // up in the file tree) would otherwise drive the material/group loops with uninitialised
+  // garbage counts against the still-null mat[]/groups[] arrays -> access violation.
+  nTextures = nGroups = nP = nLights = nModels = nDoodads = nDoodadSets = 0;
+
   char *texbuf=0;
 
   while (!f.isEof()) {
@@ -84,31 +90,28 @@ WMO::WMO(QString name) :
       // Sometimes there also empty aligtments for no (it seems like no) real reason.
       texbuf = new char[size];
       f.read(texbuf, size);
+    } else if (fourcc == "GFID") {
+      // Group File Data IDs (modern/retail WMOs): one uint32 FileDataID per group, used
+      // instead of the classic "<root>_NNN.wmo" naming. May hold several LOD sets
+      // (lodCount * nGroups); the first nGroups entries are the full-detail groups.
+      uint32 count = size / 4;
+      groupFileDataIDs.resize(count);
+      if (count)
+        f.read(groupFileDataIDs.data(), count * sizeof(uint32));
+    } else if (fourcc == "MODI") {
+      // Doodad File Data IDs (modern/retail WMOs): replaces the MODN name block. MODD's
+      // per-instance offset field then indexes into this list instead of into MODN.
+      uint32 count = size / 4;
+      doodadFileDataIDs.resize(count);
+      if (count)
+        f.read(doodadFileDataIDs.data(), count * sizeof(uint32));
     } else if (fourcc == "MOMT") {
-      // materials
-      // Materials used in this map object, 64 bytes per texture (BLP file), nMaterials entries.
-
-      for (size_t i=0; i<nTextures; i++) {
-        WMOMaterial *m = &mat[i];
-        f.read(m, 0x40);
-
-        QString texpath = QString::fromLatin1(texbuf+m->nameStart);
-
-        m->tex = TEXTUREMANAGER.add(GAMEDIRECTORY.getFile(texpath));
-        textures.push_back(texpath);
-        
-        // need repeat turned on
-        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_S,GL_REPEAT);
-        glTexParameteri(GL_TEXTURE_2D,GL_TEXTURE_WRAP_T,GL_REPEAT);
-
-
-        // material logging
-//        gLog("Material %d:\t%d\t%d\t%d\t%X\t%d\t%X\t%d\t%f\t%f",
-//          i, m->flags, m->d1, m->transparent, m->col1, m->d3, m->col2, m->d4, m->f1, m->f2);
-//        for (size_t j=0; j<5; j++) gLog("\t%d", m->dx[j]);
-//        gLog("\t - %s\n", texpath.c_str());
-
-      }
+      // materials: 64 bytes each. Texture references are NOT resolved here -- we defer that
+      // until the whole root is parsed (see below). Whether a material's texture field is a
+      // MOTX name-offset (classic) or a raw FileDataID (modern/retail) depends on whether
+      // this file shipped a MOTX chunk, which may be parsed in any order relative to MOMT.
+      for (size_t i=0; i<nTextures; i++)
+        f.read(&mat[i], 0x40);
     } else if (fourcc == "MOGN") {
       // List of group names for the groups in this map object. There are nGroups entries in this chunk.
       // A contiguous block of zero-terminated strings. The names are purely informational, 
@@ -177,10 +180,24 @@ WMO::WMO(QString name) :
       nModels = (int)size / 0x28;
       for (size_t i=0; i<nModels; i++) {
         int ofs;
-        f.read(&ofs,4); // Offset to the start of the model's filename in the MODN chunk. 
-        //Model *m = (Model*)gWorld->modelmanager.items[gWorld->modelmanager.get(ddnames + ofs)];
+        // Low 24 bits: name offset into MODN (classic) / index into MODI (modern).
+        // High byte: doodad flags.
+        f.read(&ofs,4);
         WMOModelInstance mi;
-        mi.init(ddnames+ofs, f);
+        if (!doodadFileDataIDs.empty()) {
+          // Modern: resolve the doodad model by FileDataID.
+          const uint32 idx = (uint32)ofs & 0x00FFFFFF;
+          const int fid = (idx < doodadFileDataIDs.size()) ? (int)doodadFileDataIDs[idx] : 0;
+          mi.init(fid, f); // still consumes the 36-byte transform to stay chunk-aligned
+        } else if (ddnames) {
+          // Classic: the LOW 24 BITS are the offset into the MODN string block (the high byte
+          // is doodad flags). Mask them off, or the flag byte corrupts the offset and we read
+          // an arbitrary address as the filename.
+          mi.init(ddnames + ((uint32)ofs & 0x00FFFFFF), f);
+        } else {
+          // No names and no ids (malformed/empty): consume the record, load nothing.
+          mi.init(0, f);
+        }
         modelis.push_back(mi);
       }
 
@@ -264,6 +281,43 @@ WMO::WMO(QString name) :
   }
 
   f.close();
+
+  // A valid WMO *root* always carries an MOHD chunk -- that is what allocates groups[] and
+  // mat[]. A file lacking it is a WMO group file ("<name>_NNN.wmo") or other .wmo-extension
+  // data that merely appears in the file tree; trying to render it as a root walks null arrays.
+  // Bail out cleanly (the user should open the root .wmo, not its per-group files).
+  if (!groups) {
+    LOG_ERROR << "WMO" << name << "has no MOHD chunk -- not a root WMO (open the root file, not its _NNN group files). Ignoring.";
+    ok = false;
+    delete[] texbuf;
+    return;
+  }
+
+  // Resolve material textures now that the whole root has been parsed. If a MOTX string
+  // block was present (texbuf) this is a classic WMO and each material's nameStart is a byte
+  // offset into it. Modern/retail WMOs ship no MOTX and instead store the texture's
+  // FileDataID directly in that field. (Mirrors wow.export's WMOLoader/WMOExporter, where
+  // isClassic == "MOTX present".)
+  for (size_t i = 0; i < nTextures; i++) {
+    WMOMaterial * m = &mat[i];
+    GameFile * texFile = 0;
+    QString texname;
+    if (texbuf) {
+      texname = QString::fromLatin1(texbuf + m->nameStart);
+      texFile = GAMEDIRECTORY.getFile(texname);
+    } else if (m->nameStart > 0) {
+      texFile = GAMEDIRECTORY.getFile((int)m->nameStart);
+      texname = texFile ? texFile->fullname() : QString();
+    }
+
+    m->tex = TEXTUREMANAGER.add(texFile);
+    textures.push_back(texname);
+
+    // need repeat turned on
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+  }
+
   delete[] texbuf;
 
   for (size_t i=0; i<nGroups; i++) groups[i].initDisplayList();

@@ -122,6 +122,12 @@ public:
   std::vector<QString> textures;
   std::vector<std::string> models;
   std::vector<WMOModelInstance> modelis;
+
+  // Modern (retail) WMOs reference their group files and doodad models by FileDataID
+  // instead of by name: GFID holds one FileDataID per group, MODI one per doodad. Both
+  // are empty on classic WMOs (which use the "<root>_NNN.wmo" / MODN name conventions).
+  std::vector<uint32> groupFileDataIDs;
+  std::vector<uint32> doodadFileDataIDs;
   ModelManager loadedModels;
 
   glm::vec3 viewpos;

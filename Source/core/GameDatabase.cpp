@@ -50,7 +50,7 @@ bool core::GameDatabase::initFromXML(const QString & file)
      // Cache key = WoW build + our schema version. Bump SCHEMA_VERSION whenever the
      // table layout in database.xml (or how we read it) changes, so an old cache
      // built with a different schema is rebuilt rather than queried and failing.
-     static const int SCHEMA_VERSION = 5;
+     static const int SCHEMA_VERSION = 7; // 7: DBD position-refresh falls back to nearest layout for builds newer than the bundled defs
      const QString build = GAMEDIRECTORY.version(); // current WoW build, e.g. "12.0.1.66220"
      buildVersion = build.isEmpty() ? QString() : (build + "|schema" + QString::number(SCHEMA_VERSION));
 
@@ -225,7 +225,11 @@ bool core::GameDatabase::createDatabaseFromXML(const QString & file)
   for (auto it : m_dbStruct)
     delete it;
 
-  return result; 
+  // All tables are populated (or reused from cache) -- create the secondary indexes on
+  // the hot join/lookup columns. Idempotent, so this is cheap on an already-indexed cache.
+  createIndices();
+
+  return result;
 }
 
 void core::GameDatabase::logQueryTime(void* aDb, const char* aQueryStr, sqlite3_uint64 aTimeInNs)

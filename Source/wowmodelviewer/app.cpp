@@ -9,7 +9,9 @@
 
 #include <windows.h>
 
+#include "ClientChoiceDialog.h"
 #include "Game.h"
+#include "GameFolder.h" // core::GameConfig
 #include "GlobalSettings.h"
 #include "globalvars.h"
 #include "LogStackWalker.h"
@@ -125,7 +127,8 @@ bool WowModelViewApp::OnInit()
         2000, NULL, -1, wxDefaultPosition, wxDefaultSize,
         wxBORDER_NONE);
     wxYield();
-    Sleep(1000); // let's our beautiful spash beeing displayed a few second :)
+    // (removed a blind Sleep(1000) here -- the splash has its own 2s timeout and stays
+    //  visible while real init runs, so the sleep was ~1s of dead time on every launch.)
   }
 
 
@@ -301,8 +304,37 @@ bool WowModelViewApp::OnInit()
 
   LOG_INFO << "WoW Model Viewer successfully loaded!";
 
-  // Always load World of Warcraft on startup (no prompt).
-  frame->LoadWoW();
+  // A model/char/db argument means a non-interactive (CLI) load -- auto-load the game without
+  // blocking on the launcher dialog. Otherwise show the Client Choice launcher at startup.
+  bool headlessLoad = false;
+  for (int i = 1; i < argc; i++)
+  {
+    QString a = QString::fromWCharArray(argv[i]);
+    if (a == "-m" || a == "-mo" || a == "-dbfromfile" || a.endsWith(".chr"))
+    {
+      headlessLoad = true;
+      break;
+    }
+  }
+
+  if (headlessLoad)
+  {
+    frame->LoadWoW(); // auto-pick config + profile, no prompt
+  }
+  else
+  {
+    ClientChoiceDialog clientDlg(frame);
+    if (clientDlg.ShowModal() == wxID_OK)
+    {
+      gamePath = clientDlg.dataPath();
+      core::GameConfig chosen = clientDlg.selectedConfig();
+      frame->LoadWoW(&chosen, clientDlg.selectedProfile(), true /* show loading progress */);
+    }
+    else
+    {
+      LOG_INFO << "Client Choice dialog dismissed without loading a client.";
+    }
+  }
 
 
 

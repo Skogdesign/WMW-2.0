@@ -7,6 +7,7 @@ class ModelViewer;
 
 #include <wx/string.h>
 #include <wx/treectrl.h> // wxTreeItemId
+#include <wx/timer.h>    // wxTimer for debounced as-you-type search
 
 #include "metaclasses/Container.h"
 
@@ -94,6 +95,8 @@ public:
   void OnTreeCollapsedOrExpanded(wxTreeEvent &event);
   void OnTreeItemExpanding(wxTreeEvent &event);
   void OnButton(wxCommandEvent &event);
+  void OnSearchText(wxCommandEvent &event);  // restarts the debounce timer on each keystroke
+  void OnSearchTimer(wxTimerEvent &event);   // runs the actual search after typing pauses
   void OnChoice(wxCommandEvent &event);
   void OnTreeMenu(wxTreeEvent &event);
   void OnPopupClick(wxCommandEvent &evt);
@@ -116,6 +119,10 @@ private:
   // Persistent file-tree hierarchy (rebuilt each Init/search). It must outlive
   // Init() so collapsed branches can be filled in lazily on expand.
   TreeStackItem * m_treeRoot;
+
+  // One-shot debounce for the as-you-type search: each keystroke restarts it, and the
+  // expensive filter + tree rebuild (Init) runs only when it fires after a brief pause.
+  wxTimer m_searchTimer;
 };
 
 #endif

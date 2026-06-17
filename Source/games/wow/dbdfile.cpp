@@ -255,8 +255,41 @@ void wow::DBDFile::parseDefinition(const QStringList & lines)
 
 const wow::DBDDefinition * wow::DBDFile::getStructure(const QString & build, uint32 layoutHash) const
 {
+  // 1) Exact match -- listed layout hash, build, or build range.
   for (const DBDDefinition & def : m_defs)
     if (def.isValidFor(build, layoutHash))
       return &def;
-  return nullptr;
+
+  // 2) Fallback for a client build NEWER than the bundled WoWDBDefs (Blizzard ships patches
+  // faster than the defs are updated). Use the definition covering the highest KNOWN build
+  // that is <= the target -- i.e. the layout in effect just before this build -- so field
+  // positions stay correct for new patches instead of falling back to stale base XML
+  // positions. (Without this, e.g. CreatureDisplayInfo's TextureVariationFileDataID read the
+  // wrong column on a build the defs didn't list yet, leaving creatures untextured.)
+  int target[4];
+  if (!parseBuild(build, target))
+    return nullptr;
+
+  const DBDDefinition * best = nullptr;
+  int bestBuild[4] = { 0, 0, 0, 0 };
+  auto consider = [&](const QString & b, const DBDDefinition & def)
+  {
+    int v[4];
+    if (!parseBuild(b, v))
+      return;
+    if (cmpBuild(v, target) <= 0 && (best == nullptr || cmpBuild(v, bestBuild) > 0))
+    {
+      best = &def;
+      for (int i = 0; i < 4; i++) bestBuild[i] = v[i];
+    }
+  };
+  for (const DBDDefinition & def : m_defs)
+  {
+    for (const QString & b : def.builds)
+      consider(b, def);
+    for (const auto & r : def.buildRanges)
+      consider(r.second, def); // a range's max build is its newest covered build
+  }
+
+  return best; // nullptr only if the target predates every build in the file
 }

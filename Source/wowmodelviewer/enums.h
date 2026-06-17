@@ -24,6 +24,13 @@ enum ObjectID {
   ID_FILELIST_SEARCH,
   ID_FILELIST_CONTENT,
   ID_FILELIST_FILTER,
+  ID_FILELIST_SEARCHTIMER, // debounce timer for as-you-type file search
+
+  // Client Choice (startup launcher)
+  ID_CC_BROWSE,
+  ID_CC_PRODUCT,
+  ID_CC_PROFILE,
+  ID_CC_LOAD,
   ID_FILELIST_PLAY,
   ID_FILELIST_VIEW,
   ID_FILELIST_SAVE,
@@ -281,6 +288,7 @@ enum ObjectID {
   ID_SAVE_CHAR,
   ID_LOAD_CHAR,
   ID_IMPORT_CHAR, // From Blizzards Armory website
+  ID_IMPORT_NPC,  // NPC model from a Wowhead link (direct menu entry)
 
   ID_LOAD_SET,
   ID_LOAD_START,

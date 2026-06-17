@@ -86,9 +86,11 @@ bool ArmoryImporter::acceptURL(QString url) const
 // credentials; it calls a small self-hosted proxy, which performs the OAuth
 // client_credentials grant + appearance fetch server-side and returns the JSON.
 // printf-style template: 1st %s = region, 2nd = realm slug, 3rd = character name
-// (lower-cased). Empty by default -- set this to your deployed proxy (see
-// armory-proxy/README.md), or override at runtime in Settings > General.
-static const QString DEFAULT_ARMORY_PROXY_URL = "";
+// (lower-cased). Points at this project's own self-hosted Cloudflare Worker proxy;
+// override at runtime in Settings > General. The &key= is a public rate-limit gate
+// (it ships in the binary by design) -- the Blizzard client secret lives only on the
+// proxy server, never here. See armory-proxy/README.md.
+static const QString DEFAULT_ARMORY_PROXY_URL = "https://wmv-armory.wmwarmory.workers.dev/?region=%s&realm=%s&character=%s&key=X5qtjCWegxwQfk40PS8EGcnNdD3Y";
 
 // Substitute the first three "%s" placeholders in the proxy template, in order
 // (region, realm, character), URL-encoding each value EXACTLY ONCE. Values parsed

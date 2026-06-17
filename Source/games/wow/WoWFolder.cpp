@@ -40,10 +40,25 @@ void wow::WoWFolder::initFromListfile(const QString & filename)
 
   QTextStream in(&file);
 
+  // For the optional load-progress callback: estimate completion from bytes consumed so the
+  // loading UI advances during this (longest) startup step instead of sitting at one value.
+  const qint64 totalBytes = file.size();
+  qint64 bytesRead = 0;
+  qint64 nextReport = 0;
+  const qint64 reportEvery = (totalBytes > 0) ? (totalBytes / 60) : 1; // ~60 updates
+
   LOG_INFO << "WoWFolder - Starting to build object hierarchy";
   while (!in.atEnd())
   {
     QString line = in.readLine().toLower();
+
+    bytesRead += (qint64)line.length() + 1; // approx (ASCII listfile + newline)
+    if (m_loadProgressCb && bytesRead >= nextReport)
+    {
+      m_loadProgressCb((totalBytes > 0) ? (float)bytesRead / (float)totalBytes : 0.0f);
+      nextReport = bytesRead + reportEvery;
+    }
+
     QStringList lineData = line.split(';');
     if (lineData.size() < 2)
       continue;
@@ -180,6 +195,8 @@ QString wow::WoWFolder::locale()
 
 bool wow::WoWFolder::setConfig(core::GameConfig config)
 {
+  // Forward the load-progress callback so the (long) present-file enumeration can report.
+  m_CASCFolder.setProgressCallback(m_loadProgressCb);
   return m_CASCFolder.setConfig(config);
 }
 

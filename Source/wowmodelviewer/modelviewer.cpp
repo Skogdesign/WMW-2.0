@@ -20,8 +20,10 @@
 #include "GlobalSettings.h"
 #include "globalvars.h"
 #include "ImporterPlugin.h"
+#include "LoadingDialog.h"
 #include "MemoryUtils.h"
 #include "ModelRenderPass.h"
+#include "NPCImporterDialog.h"
 #include "PluginManager.h"
 #include "RaceInfos.h"
 #include "SettingsControl.h"
@@ -133,6 +135,7 @@ EVT_MENU(ID_ENCHANTS, ModelViewer::OnEffects)
 EVT_MENU(ID_SAVE_CHAR, ModelViewer::OnToggleCommand)
 EVT_MENU(ID_LOAD_CHAR, ModelViewer::OnToggleCommand)
 EVT_MENU(ID_IMPORT_CHAR, ModelViewer::OnToggleCommand)
+EVT_MENU(ID_IMPORT_NPC, ModelViewer::OnImportNPCFromURL)
 
 EVT_MENU(ID_DEFAULT_DOODADS, ModelViewer::OnToggleCommand)
 EVT_MENU(ID_USE_ANTIALIAS, ModelViewer::OnToggleCommand)
@@ -356,7 +359,6 @@ void ModelViewer::InitMenu()
   viewMenu->Append(ID_SHOW_FILE_LIST, _("Show file list"));
   viewMenu->Append(ID_SHOW_ANIM, _("Show animation control"));
   viewMenu->Append(ID_SHOW_CHAR, _("Show character control"));
-  viewMenu->Append(ID_SHOW_LIGHT, _("Show light control"));
   viewMenu->Append(ID_SHOW_MODEL, _("Show model control"));
   viewMenu->Append(ID_SHOW_MODELBANK, _("Show model bank"));
   viewMenu->AppendSeparator();
@@ -425,6 +427,7 @@ void ModelViewer::InitMenu()
     charMenu = new wxMenu;
     charMenu->Append(ID_LOAD_CHAR, _("Load Character\tF8"));
     charMenu->Append(ID_IMPORT_CHAR, _("Import Armory Character"));
+    charMenu->Append(ID_IMPORT_NPC, _("Import NPC from URL..."));
     charMenu->Append(ID_SAVE_CHAR, _("Save Character\tF7"));
     charMenu->AppendSeparator();
 
@@ -516,7 +519,6 @@ void ModelViewer::InitMenu()
     menuBar->Append(fileMenu, _("&File"));
     menuBar->Append(viewMenu, _("&View"));
     menuBar->Append(charMenu, _("&Character"));
-    menuBar->Append(lightMenu, _("&Lighting"));
     menuBar->Append(optMenu, _("&Options"));
     menuBar->Append(effectsMenu, _("&Effects"));
     menuBar->Append(aboutMenu, _("&About"));
@@ -574,6 +576,7 @@ void ModelViewer::InitObjects()
   animControl = new AnimControl(this, ID_ANIM_FRAME);
   charControl = new CharControl(this, ID_CHAR_FRAME);
   lightControl = new LightControl(this, ID_LIGHT_FRAME);
+  lightControl->Show(false);   // kept only to drive the default scene light; never shown as UI
   modelControl = new ModelControl(this, ID_MODEL_FRAME);
   settingsControl = new SettingsControl(this, ID_SETTINGS_FRAME);
   settingsControl->Show(false);
@@ -703,11 +706,8 @@ void ModelViewer::InitDocking()
                            Name(wxT("charControl")).Caption(wxT("Character")).
                            BestSize(wxSize(170, 700)).Right().Layer(2).Show(isChar));
 
-  // Lighting control
-  interfaceManager.AddPane(lightControl, wxAuiPaneInfo().
-                           Name(wxT("Lighting")).Caption(wxT("Lighting")).
-                           FloatingSize(wxSize(170, 430)).Float().Fixed().Show(false).
-                           DestroyOnClose(false)); //.FloatingPosition(GetStartPosition())
+  // Lighting control panel removed (lighting feature pulled). lightControl still exists and
+  // provides the default scene light, but it is no longer shown as a dockable pane.
 
   // model control
   interfaceManager.AddPane(modelControl, wxAuiPaneInfo().
@@ -761,10 +761,7 @@ void ModelViewer::ResetLayout()
                            Name(wxT("charControl")).Caption(wxT("Character")).
                            BestSize(wxSize(170, 700)).Right().Layer(2).Show(isChar));
 
-  interfaceManager.AddPane(lightControl, wxAuiPaneInfo().
-                           Name(wxT("Lighting")).Caption(wxT("Lighting")).
-                           FloatingSize(wxSize(170, 430)).Float().Fixed().Show(false).
-                           DestroyOnClose(false)); //.FloatingPosition(GetStartPosition())
+  // (Lighting pane removed; lightControl still provides the default scene light.)
 
   interfaceManager.AddPane(modelControl, wxAuiPaneInfo().
                            Name(wxT("Models")).Caption(wxT("Models")).
@@ -1722,19 +1719,30 @@ void ModelViewer::OnGameToggle(wxCommandEvent &event)
     LoadWoW();
 }
 
-void ModelViewer::LoadWoW()
+void ModelViewer::LoadWoW(const core::GameConfig * chosenConfig, const QString & profileOverride, bool showProgress)
 {
   fileControl->Disable();
   if (gamePath.IsEmpty() || !wxDirExists(gamePath)) {
     getGamePath();
   }
-  
+
   if (!core::Game::instance().initDone())
     core::Game::instance().init(new wow::WoWFolder(QString::fromWCharArray(gamePath.c_str())), new wow::WoWDatabase());
 
+  core::GameConfig config;
+
+  // The startup Client Choice launcher resolves the product/locale itself and hands it in;
+  // when it isn't used (headless/CLI loads), fall back to detecting + auto/prompt-picking.
+  if (chosenConfig)
+  {
+    config = *chosenConfig;
+    LOG_INFO << "Client Choice selected config:" << config.locale << config.product << config.version;
+  }
+  else
+  {
   // init game config
   std::vector<core::GameConfig> configsFound = GAMEDIRECTORY.configsFound();
-  
+
   if (configsFound.empty())
   {
     wxString message = wxString::Format(wxT("Fatal Error: Could not find any locale from your World of Warcraft folder"));
@@ -1742,8 +1750,8 @@ void ModelViewer::LoadWoW()
     dial->ShowModal();
     return;
   }
- 
-  core::GameConfig config = configsFound[0];
+
+  config = configsFound[0];
 
   unsigned int nbConfigs = configsFound.size();
 
@@ -1817,14 +1825,32 @@ void ModelViewer::LoadWoW()
         return;
     }
   }
+  } // end else: auto-detect / prompt for the config
+
+  // Startup progress window (Client Choice -> Load). Shown across the heavy, synchronous load
+  // steps below; left null (and thus a no-op) for headless/CLI loads.
+  LoadingDialog * progress = 0;
+  if (showProgress)
+  {
+    progress = new LoadingDialog(this);
+    progress->Show();
+    progress->step(_("Opening game data..."), 10);
+    LoadingDialog * pd = progress;
+    GAMEDIRECTORY.setLoadProgressCallback([pd](float frac) {
+      pd->step(_("Opening game data..."), 10 + (int)(frac * 34.0f)); // advance 10 -> 44 during file enumeration
+    });
+  }
 
   if (!GAMEDIRECTORY.setConfig(config))
   {
+    GAMEDIRECTORY.setLoadProgressCallback(std::function<void(float)>());
+    if (progress) progress->Destroy();
     wxString message = wxString::Format(wxT("Fatal Error: Could not load your World of Warcraft Data folder (error %d)."), GAMEDIRECTORY.lastError());
     wxMessageDialog *dial = new wxMessageDialog(NULL, message, wxT("World of Warcraft Not Found"), wxOK | wxICON_ERROR);
     dial->ShowModal();
     return;
   }
+  GAMEDIRECTORY.setLoadProgressCallback(std::function<void(float)>()); // done enumerating
 
   LOG_INFO << "Major version:" << GAMEDIRECTORY.majorVersion();
   // check if we are loading a 9.x version of WoW
@@ -1833,6 +1859,7 @@ void ModelViewer::LoadWoW()
     wxString message = wxString::Format(wxT("This version of WoW Model Viewer is intended to be used with WoW Shadowlands(9.x.x) or above only\n"
                                             "For older WoW versions support, please refer to this page to pick the right WoW Model Viewer version:\n"
                                             "https://download.wowmodelviewer.net"));
+    if (progress) progress->Destroy();
     wxMessageDialog *dial = new wxMessageDialog(NULL, message, wxT("Wrong World of Warcraft version"), wxOK | wxICON_ERROR);
     dial->ShowModal();
     return;
@@ -1845,20 +1872,38 @@ void ModelViewer::LoadWoW()
 
   SetStatusText(wxString(GAMEDIRECTORY.locale().toStdWString()), 2);
 
-  // init file list
-  QStringList ver = GAMEDIRECTORY.version().split('.');
-
-  QString baseConfigFolder = "games/wow/" + ver[0] + "." + ver[1] + "/";
+  // Pick the data profile (schema directory). The Client Choice launcher can override it;
+  // otherwise derive "games/wow/<major>.<minor>/" from the detected client version.
+  QString baseConfigFolder;
+  if (!profileOverride.isEmpty())
+  {
+    baseConfigFolder = "games/wow/" + profileOverride + "/";
+  }
+  else
+  {
+    QStringList ver = GAMEDIRECTORY.version().split('.');
+    baseConfigFolder = "games/wow/" + ver[0] + "." + ver[1] + "/";
+  }
 
   LOG_INFO << "Using following folder to read game info" << baseConfigFolder;
   core::Game::instance().setConfigFolder(baseConfigFolder);
- 
+
+  if (progress) progress->step(_("Loading file list..."), 45);
+  if (progress)
+  {
+    LoadingDialog * pd = progress;
+    GAMEDIRECTORY.setLoadProgressCallback([pd](float frac) {
+      pd->step(_("Loading file list..."), 45 + (int)(frac * 27.0f)); // advance 45 -> 72 during the parse
+    });
+  }
   GAMEDIRECTORY.initFromListfile("../../../listfile.csv");
-  
+  GAMEDIRECTORY.setLoadProgressCallback(std::function<void(float)>()); // clear
+
   if (!customDirectoryPath.IsEmpty())
     core::Game::instance().addCustomFiles(QString::fromWCharArray(customDirectoryPath.c_str()), customFilesConflictPolicy);
 
   // init database
+  if (progress) progress->step(_("Opening database..."), 80);
   InitDatabase();
  
   /*
@@ -1879,15 +1924,22 @@ void ModelViewer::LoadWoW()
   //wxMessageBox(wxT("Database loading is not yet supported. Available functionalities are quite restricted in this alpha release."), wxT("No database support yet"));
 
 
+  if (progress) progress->step(_("Building file list..."), 92);
   SetStatusText(wxT("Initializing File Control..."));
   fileControl->Init(this);
-  
+
   if (charControl->Init() == false)
   {
     SetStatusText(wxT("Error Initializing the Character Controls."));
   };
   fileControl->Enable();
   SetStatusText(wxT("File Control Initialized."));
+
+  if (progress)
+  {
+    progress->step(_("Ready"), 100);
+    progress->Destroy();
+  }
 }
 
 void ModelViewer::OnCharToggle(wxCommandEvent &event)
@@ -1899,6 +1951,36 @@ void ModelViewer::OnCharToggle(wxCommandEvent &event)
     charControl->selectItem(UPDATE_SINGLE_ITEM, -1);
   else if (isChar)
     charControl->OnCheck(event);
+}
+
+// Direct "Import NPC from URL" entry: open the Wowhead NPC import dialog and load the model
+// straight away, so the user no longer has to go View -> View NPC -> Import URL -> Display.
+void ModelViewer::OnImportNPCFromURL(wxCommandEvent &event)
+{
+  NPCimporterDialog * dlg = new NPCimporterDialog();
+  if (dlg->ShowModal() == wxID_OK)
+  {
+    const int npcId = dlg->getImportedId();
+    if (npcId != -1)
+    {
+      // If this NPC isn't already in the loaded WoW database, add it from the imported data
+      // so LoadNPC() can resolve its display/model (mirrors the old NPC-browser import path).
+      sqlResult existing = GAMEDATABASE.sqlQuery(QString("SELECT ID FROM Creature WHERE ID = %1").arg(npcId));
+      if (!existing.valid || existing.empty())
+      {
+        const QString line = dlg->getNPCLine();         // "id,displayId,type,name"
+        const int displayId = line.section(',', 1, 1).toInt();
+        const int type = line.section(',', 2, 2).toInt();
+        const QString name = line.section(',', 3);      // remainder, tolerates commas in the name
+        if (displayId > 0)
+          GAMEDATABASE.sqlQuery(QString("INSERT INTO Creature(ID,CreatureType,DisplayID1,Name_Lang) VALUES (%1,%2,%3,\"%4\")")
+                                  .arg(npcId).arg(type).arg(displayId).arg(name));
+      }
+
+      LoadNPC(npcId);
+    }
+  }
+  dlg->Destroy();
 }
 
 void ModelViewer::OnMount(wxCommandEvent &event)

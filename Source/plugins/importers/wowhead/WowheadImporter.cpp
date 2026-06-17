@@ -102,6 +102,11 @@ NPCInfos * WowheadImporter::importNPC(QString urlToGrab) const
 
   int NPCDispId = NPCDispIdstr.toInt();
 
+  // page fetched but no usable model id parsed -> treat as a failure so the user gets a
+  // clear error rather than a silently broken import
+  if (NPCDispId <= 0)
+    return NULL;
+
   result = new NPCInfos();
 
   result->name = NPCName.toStdWString();
@@ -170,16 +175,24 @@ QString WowheadImporter::extractSubString(QString & datas, QString beginPattern,
 
 QByteArray WowheadImporter::getURLData(QString inputUrl) const
 {
-  QUrl url = QString(inputUrl);
+  // Wowhead is HTTPS-only, and users routinely paste a bare "www.wowhead.com/npc=..."
+  // with no scheme -- QUrl/QNetworkAccessManager cannot fetch a schemeless URL, which is
+  // exactly the "URL cannot be reached" failure. Normalise to https:// and follow any
+  // redirects (http->https, www/non-www, trailing slash).
+  QString s = inputUrl.trimmed();
+  if (s.startsWith("http://", Qt::CaseInsensitive))
+    s.replace(0, 7, "https://");
+  else if (!s.startsWith("https://", Qt::CaseInsensitive))
+    s.prepend("https://");
 
-  if (!url.errorString().isEmpty())
-  {
+  QUrl url(s);
+  if (!url.isValid())
     return QByteArray();
-  }
 
   QNetworkAccessManager manager;
   QNetworkRequest request(url);
   request.setRawHeader("User-Agent", "WoWModelViewer");
+  request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
   QNetworkReply *response = manager.get(request);
   QEventLoop eventLoop;
   connect(response, SIGNAL(finished()), &eventLoop, SLOT(quit()));
@@ -187,6 +200,7 @@ QByteArray WowheadImporter::getURLData(QString inputUrl) const
   eventLoop.exec();
 
   QByteArray htmldata = response->readAll(); // Source should be stored here
+  response->deleteLater();
 
   return htmldata;
 }

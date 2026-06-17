@@ -42,7 +42,6 @@ class WMOGroup
   unsigned int *cv;
   WMOBatch *batches;
   WMOVertColor *VertexColors;
-  uint32 *IndiceToVerts;
 
   glm::vec3 v1, v2;
   glm::vec3 b1, b2;

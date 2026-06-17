@@ -20,6 +20,7 @@ class WMOModelInstance {
 
   WoWModel *model;
   QString filename;
+  int fileDataId; // >0 => modern doodad referenced by FileDataID (filename resolved on load)
   int id;
   unsigned int scale;
   int light;
@@ -28,6 +29,7 @@ class WMOModelInstance {
 
   WMOModelInstance() {}
   void init(char *fname, GameFile &f);
+  void init(int fileDataID, GameFile &f); // modern: doodad referenced by FileDataID
   void draw();
 
   void loadModel(ModelManager &mm);

@@ -14,6 +14,7 @@
 #include "animcontrol.h"
 #include "Attachment.h"
 #include "GlobalSettings.h"
+#include "WMOGroup.h" // full WMOGroup definition (for per-group bounds when framing a WMO)
 #include "globalvars.h"
 #include "modelviewer.h"
 #include "shaders.h"
@@ -401,6 +402,33 @@ void ModelCanvas::LoadWMO(wxString fn)
   if (!wmo) {
     wmo = new WMO(QString::fromWCharArray(fn.c_str()));
     root->setModel(wmo);
+
+    // Frame the camera to the whole WMO. A WMO isn't a WoWModel, so the usual camera.reset()
+    // never sizes to it -- without this a building loads filling (and overflowing) the view.
+    // Group vmin/vmax are already in render space (the MOVT loader applies the X,Z,-Y swizzle),
+    // so aggregate the bounds of the groups that actually have geometry.
+    if (wmo->ok && wmo->nGroups > 0) {
+      glm::vec3 mn(1e9f), mx(-1e9f);
+      bool any = false;
+      for (size_t i = 0; i < wmo->nGroups; i++) {
+        if (wmo->groups[i].nVertices == 0)
+          continue; // empty group: vmin/vmax aren't meaningful
+        const glm::vec3 & gmin = wmo->groups[i].vmin;
+        const glm::vec3 & gmax = wmo->groups[i].vmax;
+        if (gmin.x < mn.x) mn.x = gmin.x;
+        if (gmin.y < mn.y) mn.y = gmin.y;
+        if (gmin.z < mn.z) mn.z = gmin.z;
+        if (gmax.x > mx.x) mx.x = gmax.x;
+        if (gmax.y > mx.y) mx.y = gmax.y;
+        if (gmax.z > mx.z) mx.z = gmax.z;
+        any = true;
+      }
+      if (any) {
+        const glm::vec3 center = (mn + mx) * 0.5f;
+        const glm::vec3 d = mx - center;
+        camera.frameBounds(center, sqrtf(d.x * d.x + d.y * d.y + d.z * d.z));
+      }
+    }
   }
 }
 
@@ -433,8 +461,13 @@ void ModelCanvas::OnMouse(wxMouseEvent& event)
 
   if (event.GetEventType() == wxEVT_MOUSEWHEEL)
   {
-    const auto zoom = -event.GetWheelRotation() / 240.f * mul;
-    camera.setRadius(camera.radius() + zoom);
+    // Multiplicative zoom (dolly): each notch SCALES the orbit distance, so zooming stays fast
+    // far out and precise up close regardless of model size. The old additive step (~0.5 units
+    // per notch) was unusably slow on WMOs, which sit hundreds-to-thousands of units away.
+    const int wheelDelta = event.GetWheelDelta() ? event.GetWheelDelta() : 120;
+    const float notches = (float)event.GetWheelRotation() / (float)wheelDelta;
+    const float perNotch = event.m_shiftDown ? 0.95f : 0.82f; // Shift = finer steps
+    camera.setRadius(camera.radius() * powf(perNotch, notches));
   }
   else if (event.Dragging())
   {
@@ -449,8 +482,10 @@ void ModelCanvas::OnMouse(wxMouseEvent& event)
     }
     else if(event.RightIsDown())
     {
-      const auto x = deltax * 0.025;
-      const auto y = deltay * 0.025;
+      // Pan proportionally to the orbit distance, so it's usable on big WMOs (a fixed step
+      // barely nudged them) while staying fine on small models.
+      const auto x = deltax * camera.radius() * 0.0025f;
+      const auto y = deltay * camera.radius() * 0.0025f;
 
       const auto look = camera.lookAt();
       const auto right = camera.right();
@@ -459,7 +494,8 @@ void ModelCanvas::OnMouse(wxMouseEvent& event)
     }
     else if(event.MiddleIsDown())
     {
-      camera.setRadius(camera.radius() + deltay/10.f);
+      // Multiplicative dolly (drag down = zoom out), matching the wheel.
+      camera.setRadius(camera.radius() * powf(1.01f, deltay));
     }
   }
   

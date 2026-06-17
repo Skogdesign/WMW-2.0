@@ -206,3 +206,29 @@ DBFile * wow::TableStructure::createDBFile()
 
   return result;
 }
+
+void wow::WoWDatabase::createIndices()
+{
+  // database.xml declares only PRIMARY KEYs (autoindex on ID), so every per-load lookup/join
+  // on a non-PK column was a full table scan (ItemModifiedAppearance ~156k, TextureFileData
+  // ~210k, ItemDisplayInfoMaterialRes ~221k rows, plus the ChrCustomization* + Creature*
+  // joins). These secondary indexes turn those scans into index seeks. Issued idempotently
+  // (IF NOT EXISTS) every launch, so an existing on-disk cache gains them once -- no full
+  // DB2 rebuild needed. Each runs independently so a missing table can't abort the rest.
+  static const char * const indices[] = {
+    "CREATE INDEX IF NOT EXISTS idx_ima_itemid      ON ItemModifiedAppearance(ItemID)",
+    "CREATE INDEX IF NOT EXISTS idx_idimr_idi       ON ItemDisplayInfoMaterialRes(ItemDisplayInfoID)",
+    "CREATE INDEX IF NOT EXISTS idx_tfd_mrid        ON TextureFileData(MaterialResourcesID)",
+    "CREATE INDEX IF NOT EXISTS idx_mfd_mrid        ON ModelFileData(ModelResourcesID)",
+    "CREATE INDEX IF NOT EXISTS idx_cmfd_race       ON ComponentModelFileData(RaceID)",
+    "CREATE INDEX IF NOT EXISTS idx_ctfd_race       ON ComponentTextureFileData(RaceID)",
+    "CREATE INDEX IF NOT EXISTS idx_ccelem_choice   ON ChrCustomizationElement(ChrCustomizationChoiceID)",
+    "CREATE INDEX IF NOT EXISTS idx_ccchoice_option ON ChrCustomizationChoice(ChrCustomizationOptionID)",
+    "CREATE INDEX IF NOT EXISTS idx_ccchoice_req    ON ChrCustomizationChoice(ChrCustomizationReqID)",
+    "CREATE INDEX IF NOT EXISTS idx_cdigd_cdi       ON CreatureDisplayInfoGeosetData(CreatureDisplayInfoID)",
+    "CREATE INDEX IF NOT EXISTS idx_cmd_fdid        ON CreatureModelData(FileDataID)",
+    "CREATE INDEX IF NOT EXISTS idx_cdi_model       ON CreatureDisplayInfo(ModelID)",
+  };
+  for (const char * const sql : indices)
+    sqlQuery(QString::fromLatin1(sql));
+}

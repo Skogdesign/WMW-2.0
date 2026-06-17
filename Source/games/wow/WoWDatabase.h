@@ -74,6 +74,11 @@ namespace wow
       // definition for the loaded build, so the curated XML names/types stay
       // but positions track the current game version.
       void refreshStructures(std::vector<core::TableStructure *> &) override;
+
+      // Secondary indexes on the hot foreign-key / join columns the per-load
+      // customization/equipment/creature queries filter on (database.xml declares
+      // only PRIMARY KEYs, so these were full table scans of 30k-220k-row tables).
+      void createIndices() override;
   };
 
 }

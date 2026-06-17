@@ -112,6 +112,11 @@ namespace core
     // from WoWDBDefs for a build newer than the shipped schema). Default no-op.
     virtual void refreshStructures(std::vector<TableStructure *> &) {}
 
+    // Create secondary indexes on hot join/lookup columns, after all tables are populated.
+    // Issued idempotently (CREATE INDEX IF NOT EXISTS) so an existing on-disk cache picks
+    // them up on the next launch without a full rebuild. Default no-op.
+    virtual void createIndices() {}
+
   private:
     static int treatQuery(void *NotUsed, int nbcols, char ** values, char ** cols);
     static void logQueryTime(void* aDb, const char* aQueryStr, sqlite3_uint64 aTimeInNs);

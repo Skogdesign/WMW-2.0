@@ -15,6 +15,7 @@ set(src  AnimationExportChoiceDialog.cpp
          charcontrol.cpp
          CharDetailsCustomizationChoice.cpp
          CharDetailsFrame.cpp
+         ClientChoiceDialog.cpp
          DisplaySettings.cpp
          effects.cpp
          ExportSettings.cpp
@@ -24,6 +25,7 @@ set(src  AnimationExportChoiceDialog.cpp
          ItemImporterDialog.cpp
          itemselection.cpp
          lightcontrol.cpp
+         LoadingDialog.cpp
          liquid.cpp
          LogStackWalker.cpp
          main.cpp
@@ -48,6 +50,7 @@ set(headers AnimationExportChoiceDialog.h
             charcontrol.h
             CharDetailsCustomizationChoice.h
             CharDetailsFrame.h
+            ClientChoiceDialog.h
             DisplaySettings.h
             effects.h
             enums.h
@@ -58,6 +61,7 @@ set(headers AnimationExportChoiceDialog.h
             ItemImporterDialog.h
             itemselection.h
             lightcontrol.h
+            LoadingDialog.h
             liquid.h
             LogStackWalker.h
             maptile.h
@@ -116,11 +120,17 @@ set(wow10_1_files
                  ${CMAKE_SOURCE_DIR}/bin_support/wow/10.1/AnimationData.csv
                  ${CMAKE_SOURCE_DIR}/bin_support/wow/10.1/ChrRacesCustomization.csv)
 
+set(wow12_0_files
+                 ${CMAKE_SOURCE_DIR}/bin_support/wow/12.0/database.xml
+                 ${CMAKE_SOURCE_DIR}/bin_support/wow/12.0/AnimationData.csv
+                 ${CMAKE_SOURCE_DIR}/bin_support/wow/12.0/ChrRacesCustomization.csv)
+
 source_group("wow9.2" FILES ${wow9_2_files})
 source_group("wow10.0" FILES ${wow10_0_files})
 source_group("wow10.1" FILES ${wow10_1_files})
+source_group("wow12.0" FILES ${wow12_0_files})
 
-set(useful_files ${common_files} ${cmake_files} ${wow9_2_files} ${wow10_0_files} ${wow10_1_files})
+set(useful_files ${common_files} ${cmake_files} ${wow9_2_files} ${wow10_0_files} ${wow10_1_files} ${wow12_0_files})
 
 set_source_files_properties(${useful_files} PROPERTIES HEADER_FILE_ONLY TRUE)
 
@@ -209,3 +219,4 @@ install(FILES ${QT_PLUGIN_IMAGE_FILES} DESTINATION ${BIN_DIR}plugins/imageformat
 install(FILES ${wow9_2_files} DESTINATION ${CMAKE_SOURCE_DIR}/bin/games/wow/9.2)
 install(FILES ${wow10_0_files} DESTINATION ${CMAKE_SOURCE_DIR}/bin/games/wow/10.0)
 install(FILES ${wow10_1_files} DESTINATION ${CMAKE_SOURCE_DIR}/bin/games/wow/10.1)
+install(FILES ${wow12_0_files} DESTINATION ${CMAKE_SOURCE_DIR}/bin/games/wow/12.0)

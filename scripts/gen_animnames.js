@@ -1,5 +1,5 @@
-// Generates AnimationData.csv (ID;Name) from wow.export's ANIM_NAMES table,
-// which is a current, index-based list of WoW animation names.
+// Generates AnimationData.csv (ID;Name) from an index-based ANIM_NAMES table
+// (a current list of WoW animation names, keyed by animation index).
 // Usage: node gen_animnames.js <AnimMapper.js> <out.csv>
 const fs = require('fs');
 

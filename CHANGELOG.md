@@ -3,15 +3,131 @@
 All notable changes to **WoW Model Viewer: Midnight** are recorded here.
 Format loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — targeting 0.2.0
-
-_Changes for the next release are collected here as they are made._
+## [0.2.0] — 2026-06-17
 
 ### Added
+- **Startup "Client Choice" launcher.** Instead of silently auto-loading on launch, WMV now
+  opens a small dialog (in the app's native style) to pick the **Folder** (with Browse), shows
+  the **Detected** clients read from `.build.info`, and lets you choose the **Product** (e.g.
+  `wow`, `wow_beta`) and the data **Profile** (schema directory, auto-selected to match the
+  client version), then **Load**. Command-line/headless loads (`-m`, `-mo`, `-dbfromfile`,
+  `.chr`) still load automatically without the dialog.
+- **"Loading Client" progress window.** After pressing Load, a small progress dialog shows the
+  load stages — Opening game data → Loading file list → Opening database → Building file list —
+  with a percentage bar, instead of an empty window while the client loads. The bar advances
+  smoothly through the two long steps — the present-file enumeration ("Opening game data") and
+  the file-list parse — rather than parking at one value, and repaints reliably at each stage.
+- **Import NPC from URL** is now a direct entry in the **Character** menu (next to "Import
+  Armory Character"): it opens the Wowhead NPC import dialog and loads the model in one step,
+  instead of the old View → View NPC → Import URL → Display detour.
+- **Retail (12.x) WMO support.** World objects / buildings (`.wmo`) now load and render on
+  modern WoW. Modern WMOs reference their data by FileDataID rather than by name, which the
+  classic loader didn't handle, so opening one previously crashed (it read a texture name from
+  a null string block using a FileDataID as an offset). The loader now follows the same rules
+  wow.export uses: group files are opened via the root's `GFID` chunk (FileDataIDs) with the
+  old `_NNN.wmo` naming as fallback; material textures are taken as FileDataIDs when no `MOTX`
+  name block is present (otherwise the classic name-offset path); and doodad models are read
+  from `MODI` FileDataIDs (otherwise `MODN` names). Classic WMOs still load exactly as before.
+  Selecting a WMO *group* file (`<name>_NNN.wmo`, which also appears in the file tree) no
+  longer crashes — only root WMOs carry the header that drives loading, so group files are
+  now ignored with a log message instead of dereferencing uninitialised counts/arrays.
+  Render batches now resolve their material with the modern >256-material rule (when the batch
+  flag `0x2` is set the 16-bit index in the batch's second bounding box is used instead of the
+  8-bit field), matching wow.export — previously the wrong material/texture was applied.
+  The WMO file list now shows only **root** WMOs: group and LOD files (`<name>_000.wmo`,
+  `..._000_lod1.wmo`, etc.) are hidden, since they aren't standalone objects (the root
+  references them). Uses wow.export's exact filter, so the list matches wow.export's count.
+  The camera now frames a WMO to fit the view when it loads (WMOs span hundreds-thousands of
+  units, so they used to load filling/overflowing the screen); the max zoom-out distance was
+  also raised from 150 so large WMOs can actually be framed.
+  WMO orientation is fixed: the geometry was converted into an old Y-up coordinate space (a
+  leftover `x,z,-y` swizzle) while the camera and M2 models are Z-up, so WMOs loaded tipped 90
+  degrees. They now render directly (Z-up), upright like in wow.export.
 
 ### Changed
+- **Customization & Randomise are much faster / no longer freeze.** Changing a
+  character's appearance (especially Dracthyr, which has many attached models) used to
+  unmerge and re-load *every* attached model from disk on every change — re-reading and
+  re-parsing each M2 and rebuilding all merged geometry repeatedly. Each refresh now only
+  touches the models that actually changed, rebuilds the merged geometry once, and keeps
+  a small cache of recently-used models so toggling a piece off and back on doesn't reload
+  it. Refresh time is logged (`WoWModel::refresh took N ms`) for diagnostics.
+- **Armory character import works out of the box** — a default proxy is now bundled, so
+  imports work with no setup (still overridable in Settings → General → Armory). The proxy
+  holds the Blizzard credentials server-side; the app ships only the proxy URL.
+- **Much faster startup.** Building the file list used to probe CASC once per listfile line
+  (~2.1M open/close round-trips — about 6.5s of frozen UI on every launch); it now enumerates
+  the storage a single time. Also removed a blind 1-second splash-screen delay.
+- **Per-load queries are dramatically faster.** Added secondary SQLite indexes on the hot
+  join/lookup columns (customization, equipment, creature/display). They were full scans of
+  30k–220k-row tables; the indexes are added to the existing cache on next launch (no rebuild).
+- **Opening a character no longer freezes** — applying the default customization now does one
+  model refresh instead of ~45 (the same batching the Randomise fix already used).
+- **Equipping and searching for items is no longer a multi-second freeze.** The item picker
+  filled its list one row at a time with no batching — and actually built the whole list
+  *twice* on open, then rebuilt it again on every keystroke in the filter. For big slots
+  (weapons, "single item") that's tens of thousands of un-batched inserts each time. The list
+  is now populated in a single batched pass (`Freeze`/`Thaw`), the duplicate build on open is
+  gone, and filter-as-you-type is batched too, so opening a slot and searching stay responsive.
+- **Equipping an item is lighter.** Two redundant full refreshes were removed: (1) merely
+  *opening* a slot/set/mount picker used to run a complete model refresh (skin re-composite +
+  geometry rebuild) before anything changed — now it doesn't; (2) swapping an item rebuilt the
+  merged geometry during unload and then again in the refresh that immediately follows — the
+  redundant unload rebuild is skipped. This also speeds up Armory/NPC imports, which set many
+  items in a row. (The single necessary refresh per equip remains; collapsing its internal
+  cost further is a larger change.)
+- **The File List search works as you type.** It previously only ran when you pressed Enter
+  (or the button). Now the results update shortly after you stop typing — debounced (~300ms)
+  so the heavy ~130k-file filter + tree rebuild runs once you pause, not on every keystroke,
+  and only once the term is 3+ characters (an empty box restores the default tree; Enter still
+  forces a search at any length).
+
+### Changed
+- **Database field positions adapt to client builds newer than the bundled definitions.** WMV
+  refreshes each table's DB2 field positions from WoWDBDefs for the loaded build; if the exact
+  build wasn't listed (Blizzard ships patches faster than the defs update), it fell back to the
+  stale hand-set positions, which silently mis-read columns (this is what broke creature skin
+  textures on 12.0.7.68235). It now falls back to the layout of the highest *known* build at or
+  below the client build — the layout in effect just before this patch — so columns stay correct
+  on new patches across all tables. The bundled 12.0 schema/data is also now tracked in the repo
+  (`bin_support/wow/12.0/`) and shipped by the installer, like the 9.2/10.0/10.1 sets.
+- **Mouse zoom/pan now scale with distance.** Zooming was a fixed step per wheel notch
+  (~0.5 units), which felt fine on a character but was painfully slow on WMOs that sit
+  hundreds-to-thousands of units away. The wheel (and middle-drag) now zoom *multiplicatively*
+  — each notch scales the orbit distance — so it's fast far out and precise up close at any
+  model size (hold **Shift** for finer steps), matching wow.export. Right-drag panning is now
+  proportional to the view distance for the same reason.
 
 ### Fixed
+- **Creatures render with their textures again.** The main cause was a wrong column position:
+  `CreatureDisplayInfo.TextureVariationFileDataID` (the creature's skin textures) was read at
+  DB2 field 24 instead of 27 for the 12.0.x layout, so it picked up `ConditionalCreatureModelID`
+  (tiny/zero values) instead of the texture FileDataIDs — leaving most creatures untextured
+  (white). The current client build is newer than the bundled WoWDBDefs, so the per-build
+  position refresh didn't cover it and the stale base position was used; the base position is
+  now corrected (the database cache rebuilds once on next launch to apply it).
+  Also fixed a contributing case: the faster startup enumeration indexed only locally-cached
+  files (`bFileAvailable`), dropping remote-only files (e.g. some skin textures) from the file
+  list on streaming installs; it now indexes every enumerated FileDataID (CascLib streams the
+  rest on demand, as the per-id probe it replaced did).
+- **WMO heap corruption (crash on load) fixed.** Once retail WMOs actually started loading,
+  the group-geometry loader's latent memory bugs began corrupting the heap (Windows
+  `0xc0000374`). The worst was a dead, never-read `IndiceToVerts` loop whose `i <= indexCount`
+  bound wrote one element past its array on the last batch; it's removed entirely (matching
+  wow.export, which has no such structure). Also hardened every group chunk read to copy
+  exactly the allocated element bytes instead of the raw chunk size (`MOPY/MOVT/MONR/MOTV/
+  MOBA/MOCV` — previously a non-multiple chunk size, or a stale/zero vertex count, overran the
+  buffer), reset all per-group counts on load, bounds-checked the render loop
+  (index/vertex/material indices) and the group fog lookup, and masked the classic doodad
+  name offset. WMOs now load without crashing.
+- **Wowhead NPC/item import works again.** The Wowhead importer plugin wasn't being built or
+  deployed (only the Armory plugin was), so no plugin handled Wowhead links and every import
+  failed with "URL cannot be reached." The plugin is now built and shipped, and the importer
+  also accepts links pasted without `https://` and follows redirects.
+
+### Removed
+- **In-app lighting controls** (the Lighting panel and the Lighting menu) have been removed.
+  A sensible default light keeps models lit — there is simply no lighting UI to configure.
 
 
 ## [0.1.5] — 2026-06-15

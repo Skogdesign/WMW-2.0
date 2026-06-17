@@ -69,6 +69,10 @@ ChoiceDialog::ChoiceDialog(CharControl *dest, int type,
   m_listctrl->InsertColumn(0, wxT("Item"), wxLIST_FORMAT_LEFT, 195);
   //m_listctrl->SetColumnWidth(0, wxLIST_AUTOSIZE);
 
+  // Bulk-populate under Freeze()/Thaw() so the native list control repaints ONCE at
+  // the end instead of once per inserted row. Item slots (weapons, "single item")
+  // can hold tens of thousands of rows; unbatched this stalled the open for seconds.
+  m_listctrl->Freeze();
   wxListItem item;
   for (size_t i = 0; i < chs.GetCount(); i++) {
     item.SetText(choices[i]);
@@ -105,6 +109,7 @@ ChoiceDialog::ChoiceDialog(CharControl *dest, int type,
     m_listctrl->InsertItem(item);
     //m_listctrl->InsertItem(i, choices[i]);
   }
+  m_listctrl->Thaw();
 
   wxBoxSizer *frameSizer = (wxBoxSizer*)this->GetSizer();
   if (frameSizer) {
@@ -200,27 +205,12 @@ FilteredChoiceDialog::FilteredChoiceDialog(CharControl *dest, int type, wxWindow
     topsizer->Fit( this );
     
 
-  m_listctrl->DeleteAllItems();
-
-  wxListItem item; 
-  for(unsigned int i=0; i<choices.Count(); i++) {
-    //item.m_mask=wxLIST_MASK_TEXT; 
-    item.SetId(i); 
-    //item.m_col=col; 
-    item.SetText(choices[i]);
-    /*
-    if (quality) {
-      item.SetTextColour(ItemQualityColour(quality->at(i)));
-    }
-    */
-    if ((i%2)==0)
-      item.SetBackgroundColour(*wxWHITE);
-    else
-      item.SetBackgroundColour(wxColour(237,243,254));
-
-    // m_listbox doesn't support wxListItem, try wxListCtrl
-    m_listctrl->InsertItem(item);
-  }
+  // The base ChoiceDialog constructor already populated m_listctrl with exactly
+  // these choices (same order, ids and zebra striping), so the old code here cleared
+  // the whole control and rebuilt it identically on every open -- a second full
+  // population of up to tens of thousands of rows, pure duplicated work. Leave the
+  // base-populated list in place; m_indices (set to 0..N above) already matches it,
+  // and DoFilter() rebuilds the visible rows when the user types in the filter.
 }
 
 void FilteredChoiceDialog::OnFilter(wxCommandEvent& event){
@@ -291,9 +281,12 @@ void FilteredChoiceDialog::DoFilter()
 {
   m_indices.clear();
 
+  // Freeze the control across the clear + re-insert so a keystroke in the filter box
+  // repaints the list once, not once per surviving row (this runs on every keypress).
+  m_listctrl->Freeze();
   m_listctrl->DeleteAllItems();
 
-  wxListItem item; 
+  wxListItem item;
   for(int i=0; i<(int)m_choices->GetCount(); ++i)
   {
     if (FilterFunc(i))
@@ -309,6 +302,7 @@ void FilteredChoiceDialog::DoFilter()
       m_listctrl->InsertItem(item);
     }
   }
+  m_listctrl->Thaw();
 }
 
 bool FilteredChoiceDialog::FilterFunc(int index)

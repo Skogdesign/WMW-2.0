@@ -96,6 +96,11 @@ bool CASCFolder::setConfig(core::GameConfig config)
       {
         LOG_INFO << "Locale set from .build.info (name probe unavailable, normal on modern WoW):" << m_currentConfig.locale;
       }
+
+      // Index every present FileDataID up front so fileExists() -- called ~2.17M times while
+      // parsing the listfile -- is an O(1) set lookup instead of a per-id CascOpenFile +
+      // CascCloseFile round-trip (that probing was ~6.5s of the startup freeze).
+      buildPresentIdIndex();
     }
   }
 
@@ -178,21 +183,68 @@ void CASCFolder::initBuildInfo()
 }
 
 
+void CASCFolder::buildPresentIdIndex()
+{
+  m_presentIds.clear();
+  if (!hStorage)
+    return;
+
+  CASC_FIND_DATA fd;
+  HANDLE hFind = CascFindFirstFile(hStorage, "*", &fd, NULL);
+  if (hFind == NULL || hFind == INVALID_HANDLE_VALUE)
+  {
+    LOG_INFO << "CASCFolder: storage enumeration unavailable; fileExists() will probe per id.";
+    return; // leave m_presentIds empty -> fileExists() falls back to the per-id probe
+  }
+
+  m_presentIds.reserve(1u << 21); // ~2M files in a modern retail build
+
+  // Progress reporting: the enumeration count isn't known up front, so report a soft fraction
+  // against a rough expected total (~4M files in a current retail build) capped below 1.0, just
+  // so the loading bar visibly advances during this multi-second step instead of sitting still.
+  size_t seen = 0, nextReport = 0;
+  const float EXPECTED = 4000000.0f;
+
+  do
+  {
+    if (m_progressCb && ++seen >= nextReport)
+    {
+      const float frac = (float)seen / EXPECTED;
+      m_progressCb(frac < 0.99f ? frac : 0.99f);
+      nextReport = seen + 50000; // ~80 updates over a full enumeration
+    }
+    // Index EVERY enumerated FileDataID, NOT just fd.bFileAvailable ones. bFileAvailable is set
+    // only for files cached locally on disk; on a streaming / partial install many valid files
+    // (e.g. creature skin textures) are remote-only. CascLib still opens those on demand via
+    // CascOpenFile(CASC_OPEN_BY_FILEID), exactly as the old per-id probe this replaced did --
+    // so filtering by bFileAvailable wrongly dropped them from the file tree, which broke the
+    // creature skin folder-scan and left those creatures rendering untextured (white).
+    if (fd.dwFileDataId != CASC_INVALID_ID)
+      m_presentIds.insert(static_cast<int>(fd.dwFileDataId));
+  } while (CascFindNextFile(hFind, &fd));
+  CascFindClose(hFind);
+
+  LOG_INFO << "CASCFolder: indexed" << (unsigned int)m_presentIds.size() << "present FileDataIDs (single enumeration).";
+}
+
 bool CASCFolder::fileExists(int id)
 {
-  //LOG_INFO << __FUNCTION__ << " " << file.c_str();
   if(!hStorage)
     return false;
 
-  HANDLE dummy;
+  // Fast path: O(1) lookup in the enumerated id set (buildPresentIdIndex). A real model
+  // load still force-opens by id (WoWFolder::getFile), so any id missed by enumeration is
+  // still loadable -- it just won't appear in the browse tree.
+  if (!m_presentIds.empty())
+    return m_presentIds.count(id) != 0;
 
+  // Fallback (enumeration unavailable): the original per-id open/close probe.
+  HANDLE dummy;
   if(CascOpenFile(hStorage, CASC_FILE_DATA_ID(id), m_currentCascLocale, CASC_OPEN_BY_FILEID, &dummy))
   {
-   // LOG_INFO << "OK";
     CascCloseFile(dummy);
     return true;
   }
-  // LOG_ERROR << "File" << id << "doesn't exist." << "Error" << GetLastError();
   return false;
 }
 

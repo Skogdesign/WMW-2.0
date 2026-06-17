@@ -371,6 +371,10 @@ void CharControl::OnButton(wxCommandEvent &event)
           item->setId(0);
       }
       RefreshEquipment();
+      RefreshModel(); // clearing actually changes the model, so refresh here. (The blanket
+                      // RefreshModel() that used to run after this switch was removed: it
+                      // fired a full, wasted model refresh every time a slot/set/mount PICKER
+                      // was merely opened -- a visible hitch before the menu even appeared.)
       break;
     }
     case ID_LOAD_SET:
@@ -401,8 +405,6 @@ void CharControl::OnButton(wxCommandEvent &event)
       break;
     }
   }
-
-  RefreshModel();
 }
 
 void CharControl::OnItemLevelChange(wxCommandEvent& event)

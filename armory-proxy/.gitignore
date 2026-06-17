@@ -2,4 +2,5 @@
 config.php
 .dev.vars
 wrangler.toml
+wrangler.jsonc
 .wrangler/

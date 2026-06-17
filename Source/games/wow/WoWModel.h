@@ -97,6 +97,12 @@ class _WOWMODEL_API_ WoWModel : public ManagedItem, public Displayable, public M
   void refreshMerging();
   std::set<WoWModel *> mergedModels;
 
+  // Cache of previously-merged-then-unmerged models, keyed by FileDataID. Re-merging a
+  // model from here reuses the parsed M2 + GPU buffers instead of re-reading the file
+  // from CASC, so toggling a customization/equipment piece off and on again is cheap.
+  // Owned here; bounded (see poolMergedModel) and freed in ~WoWModel.
+  std::map<uint, WoWModel *> mergedModelCache;
+
   // raw values read from file (useful for merging)
   std::vector<ModelVertex> rawVertices;
   std::vector<uint32> rawIndices;
@@ -281,10 +287,12 @@ public:
   WoWModel* mergeModel(QString & name, int type = 1, bool noRefresh = false);
   WoWModel* mergeModel(uint fileID, int type = 1, bool noRefresh = false);
   WoWModel* mergeModel(WoWModel * model, int type = 1, bool noRefresh = false);
-  void unmergeModel(QString & name);
-  void unmergeModel(uint fileID);
-  void unmergeModel(WoWModel * model);
+  void unmergeModel(QString & name, bool noRefresh = false);
+  void unmergeModel(uint fileID, bool noRefresh = false);
+  void unmergeModel(WoWModel * model, bool noRefresh = false);
   WoWModel* getMergedModel(uint fileID);
+  // Store an unmerged model in mergedModelCache (instead of deleting it) for cheap re-merge.
+  void poolMergedModel(WoWModel * model);
 
   void refresh();
   

@@ -5,6 +5,7 @@
 
 #include <QDirIterator>
 #include <QImage>
+#include <QRegularExpression>
 
 #include "CASCFile.h"
 #include "Game.h"
@@ -24,6 +25,8 @@ BEGIN_EVENT_TABLE(FileControl, wxWindow)
   EVT_TREE_ITEM_COLLAPSED(ID_FILELIST, FileControl::OnTreeCollapsedOrExpanded)
   EVT_BUTTON(ID_FILELIST_SEARCH, FileControl::OnButton)
   EVT_TEXT_ENTER(ID_FILELIST_CONTENT, FileControl::OnButton)
+  EVT_TEXT(ID_FILELIST_CONTENT, FileControl::OnSearchText)
+  EVT_TIMER(ID_FILELIST_SEARCHTIMER, FileControl::OnSearchTimer)
   EVT_CHOICE(ID_FILELIST_FILTER, FileControl::OnChoice)
   EVT_TREE_ITEM_MENU(ID_FILELIST, FileControl::OnTreeMenu)
 END_EVENT_TABLE()
@@ -78,6 +81,7 @@ FileControl::FileControl(wxWindow* parent, wxWindowID id)
   modelviewer = NULL;
   filterMode = FILE_FILTER_MODEL;
   m_treeRoot = NULL;
+  m_searchTimer.SetOwner(this, ID_FILELIST_SEARCHTIMER);
 
   if (Create(parent, id, wxDefaultPosition, wxSize(170,700), 0, wxT("ModelControlFrame")) == false) {
     LOG_ERROR << "Failed to create a window for our FileControl!";
@@ -125,6 +129,10 @@ void FileControl::Init(ModelViewer* mv)
   if (modelviewer == NULL)
     modelviewer = mv;
 
+  // A search is running now, so cancel any pending debounced one (Enter/Clear/timer all
+  // funnel through here -- this stops a queued timer from re-searching the same text).
+  m_searchTimer.Stop();
+
   LOG_INFO << "Initializing File Controls - Start";
 
   // Gets the list of files that meet the filter criteria
@@ -155,6 +163,16 @@ void FileControl::Init(ModelViewer* mv)
     // fullname() may use '/' or '\\'; normalise like beautifyFileName before testing
     if (buildRaceTree && (*it)->fullname().toLower().replace('/', '\\').startsWith("character\\"))
       continue;
+
+    // Hide WMO group + LOD files ("<name>_000.wmo", "..._000_lod1.wmo", etc.). They are not
+    // standalone WMOs -- the root WMO references its groups internally -- so only roots are
+    // listed. Pattern is wow.export's LISTFILE_MODEL_FILTER 1:1.
+    if (filterMode == FILE_FILTER_WMO)
+    {
+      static const QRegularExpression wmoGroupLod("(_\\d\\d\\d_)|(_\\d\\d\\d\\.wmo$)|(lod\\d\\.wmo$)");
+      if (wmoGroupLod.match((*it)->fullname().toLower()).hasMatch())
+        continue;
+    }
 
     QString name = (*it)->fullname();
     name += " [";
@@ -687,6 +705,27 @@ void FileControl::OnButton(wxCommandEvent &event)
     txtContent->SetValue(wxEmptyString);
     Init();
   }
+}
+
+// Fires on every keystroke in the search box. Rather than searching immediately (the filter
+// scans ~130k files and rebuilds the tree, far too heavy to run per key), restart a short
+// one-shot timer; the search runs in OnSearchTimer once typing pauses. EVT_TEXT also fires on
+// programmatic SetValue (e.g. the Clear button), but those paths call Init() -> Stop() so the
+// queued timer is harmlessly cancelled.
+void FileControl::OnSearchText(wxCommandEvent &event)
+{
+  m_searchTimer.Start(300, wxTIMER_ONE_SHOT);
+}
+
+void FileControl::OnSearchTimer(wxTimerEvent &event)
+{
+  const QString term = QString::fromWCharArray(txtContent->GetValue().c_str()).trimmed();
+
+  // Auto-search only once the term is selective enough; a 1-2 char term matches a huge slice
+  // of the archive and would rebuild a massive tree for no useful result. An empty box
+  // restores the default browse tree. (Enter still forces a search at any length.)
+  if (term.isEmpty() || term.length() >= 3)
+    Init();
 }
 
 

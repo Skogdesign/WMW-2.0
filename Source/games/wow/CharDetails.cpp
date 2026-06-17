@@ -151,6 +151,11 @@ void CharDetails::reset(WoWModel * model)
   // leaves the jaw geoset unselected -> a visibly missing jaw. (the game client only
   // auto-defaults non-0x20 options, which is exactly why it shows the same bug
   // unless a saved appearance is imported.)
+  // Batch the default-apply: set() normally calls the expensive model_->refresh() each
+  // time, so applying defaults to all ~45 options used to refresh ~45 times (a multi-second
+  // freeze on every character open). With batchUpdate_ each set() only records the choice;
+  // we refresh ONCE at the end (mirrors randomise()).
+  batchUpdate_ = true;
   for (const auto &c : choicesPerOptionMap_)
   {
     // pick the first choice whose requirement is satisfied for this character so
@@ -165,6 +170,10 @@ void CharDetails::reset(WoWModel * model)
       }
     }
   }
+  batchUpdate_ = false;
+
+  if (model_)
+    model_->refresh(); // single refresh for the whole default set (was ~45)
 }
 
 void CharDetails::randomise()
@@ -941,11 +950,12 @@ void CharDetails::refreshTextures()
 
 void CharDetails::refreshSkinnedModels()
 {
-  // first clean any previous merging
+  // Files that were merged on the PREVIOUS refresh. Only skinned-customization models
+  // are tracked here (equipment merges are owned separately by WoWItem and must not be
+  // touched), so this is the exact set we are responsible for diffing against.
+  std::set<uint> prevFiles;
   for (const auto m : models_)
-    model_->unmergeModel(m.first);
-
-  models_.clear();
+    prevFiles.insert(m.first);
 
   // Several elements can share ONE collection-model file (e.g. the DH horn +
   // blindfold pack 7760202), each selecting a different geoset GROUP within it.
@@ -953,6 +963,7 @@ void CharDetails::refreshSkinnedModels()
   // element's hideAllGeosets() wipes an earlier element's geoset (so the horns
   // vanish the moment a blindfold is also active, and vice-versa).
   std::map<uint, std::vector<std::pair<uint, uint> > > groupsByFile; // fileID -> [(GeosetType, GeosetID)]
+  models_.clear();
   for (const auto& elt : customizationElementsPerOption_)
     for (const auto m : elt.second.models)
     {
@@ -960,16 +971,36 @@ void CharDetails::refreshSkinnedModels()
       models_.emplace_back(m.first, m.second);
     }
 
+  // Diff the desired set against what is already merged, and DEFER the geometry rebuild.
+  // Previously this unmerged every skinned model and re-merged them all on every refresh,
+  // re-reading each M2 from CASC and triggering a full refreshMerging() per merge/unmerge
+  // -- so one customization change (or a single Randomise) did N+M full geometry rebuilds
+  // plus N CASC reloads, freezing the UI for seconds. WoWModel::refresh() already ends with
+  // one refreshMerging() that re-bakes all merged models, so here we only touch what
+  // actually changed and pass noRefresh=true; the final pass does the single rebuild.
+  for (uint fid : prevFiles)
+    if (groupsByFile.find(fid) == groupsByFile.end())
+      model_->unmergeModel(fid, true);            // no longer needed -> drop (cached, not freed)
+
+  for (const auto& gf : groupsByFile)
+    if (prevFiles.find(gf.first) == prevFiles.end())
+      model_->mergeModel(gf.first, 1, true);      // newly needed -> merge (reuses cache, no CASC read)
+
+  // (Re)apply the selected variant for EVERY needed file: the chosen geoset can change
+  // even when the file itself persists across refreshes (e.g. a different horn style on
+  // the same horn pack). This only toggles display flags on the merged model; the final
+  // refreshMerging() copies them into the base (restoreRawGeosets preserves them by index).
+  //
+  // Hide everything, then show only the selected variant of each group.
+  // setGeosetGroupDisplay's strict "id > GeosetType*100" test means a GeosetID of
+  // 0 selects NOTHING -- correct, because a GeosetID-0 choice is the "None"
+  // variant (e.g. Blindfold = None -> geoset 2500) which must stay hidden. Real
+  // attachments (DH horns 2401, etc.) use GeosetID >= 1 and show normally.
   for (const auto& gf : groupsByFile)
   {
-    auto * model = model_->mergeModel(gf.first);
+    auto * model = model_->getMergedModel(gf.first);
     if (!model)
       continue;
-    // Hide everything, then show only the selected variant of each group.
-    // setGeosetGroupDisplay's strict "id > GeosetType*100" test means a GeosetID of
-    // 0 selects NOTHING -- correct, because a GeosetID-0 choice is the "None"
-    // variant (e.g. Blindfold = None -> geoset 2500) which must stay hidden. Real
-    // attachments (DH horns 2401, etc.) use GeosetID >= 1 and show normally.
     model->hideAllGeosets();
     for (const auto& g : gf.second)
       model->setGeosetGroupDisplay((CharGeosets)g.first, g.second);

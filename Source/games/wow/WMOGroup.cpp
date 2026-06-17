@@ -62,35 +62,52 @@ void WMOGroup::initDisplayList()
   indices = NULL;
   materials = NULL;
   batches = 0;
-  nBatches = 0;
+  VertexColors = NULL;
+  cv = 0;
+  // Reset ALL element counts up front: a group whose file is missing a given chunk must not
+  // reuse a previously-loaded group's counts, or later allocations would be mis-sized and the
+  // render/parse paths would read or write out of bounds.
+  nBatches = nVertices = nIndices = nTriangles = 0;
 
   WMOGroupHeader gh;
 
   short *useLights = 0;
   int nLR = 0;
 
-  // open group file
-  QString temp(wmo->itemName());
-  temp = temp.left(temp.lastIndexOf('.'));
-
-  QString fname = QString("%1_%2.wmo").arg(temp).arg(num, 3, 10, QChar('0'));
-  CASCFile gf(fname);
+  // open group file. Modern (retail) WMOs reference each group by FileDataID via the root's
+  // GFID chunk; classic WMOs use the "<root>_NNN.wmo" name convention. A FileDataID (gid > 0)
+  // makes CASCFile open by id; otherwise it falls back to opening by name.
+  QString gname;
+  int gid = 0;
+  if (num >= 0 && (size_t)num < wmo->groupFileDataIDs.size() && wmo->groupFileDataIDs[num] != 0) {
+    gid = (int)wmo->groupFileDataIDs[num];
+    gname = QString("File%1.unk").arg((uint)gid, 8, 16, QLatin1Char('0'));
+  } else {
+    QString temp(wmo->itemName());
+    temp = temp.left(temp.lastIndexOf('.'));
+    gname = QString("%1_%2.wmo").arg(temp).arg(num, 3, 10, QChar('0'));
+  }
+  CASCFile gf(gname, gid);
   gf.open();
   gf.seek(0x14);
 
   // read header
   gf.read(&gh, sizeof(WMOGroupHeader));
-  WMOFog &wf = wmo->fogs[gh.fogs[0]];
-  if (wf.r2 <= 0)
-    fog = -1; // default outdoor fog..?
-  else
+  // gh.fogs[0] is an unchecked uint8 and the root may carry no MFOG chunk (empty fogs vector),
+  // so bounds-check before indexing -- wmo->fogs[gh.fogs[0]] on an empty vector is OOB.
+  if (gh.fogs[0] < wmo->fogs.size() && wmo->fogs[gh.fogs[0]].r2 > 0)
     fog = gh.fogs[0];
+  else
+    fog = -1; // no fog / default outdoor fog
 
   name = QString::fromLatin1(wmo->groupnames + gh.nameStart).toStdWString();
   desc = QString::fromLatin1(wmo->groupnames + gh.nameStart2).toStdWString();
 
-  b1 = glm::vec3(gh.box1[0], gh.box1[2], -gh.box1[1]);
-  b2 = glm::vec3(gh.box2[0], gh.box2[2], -gh.box2[1]);
+  // WMW renders WoW vertices directly under a Z-up camera (same as M2 models), so WMO geometry
+  // is NOT converted into the old WoWmapview Y-up space (x,z,-y) -- that conversion tipped WMOs
+  // 90 degrees relative to characters/wow.export. Keep bounds in the same direct space.
+  b1 = glm::vec3(gh.box1[0], gh.box1[1], gh.box1[2]);
+  b2 = glm::vec3(gh.box2[0], gh.box2[1], gh.box2[2]);
 
   gf.seek(0x58); // first chunk
 
@@ -149,9 +166,9 @@ void WMOGroup::initDisplayList()
       //      Triangles stored here are more-or-less pre-sorted by texture, so it's ok to draw them sequentially.
 
       // materials per triangle
-      nTriangles = (uint32)(size / 2);
-      materials = new uint16[nTriangles];
-      gf.read(materials, size);
+      nTriangles = (uint32)(size / sizeof(uint16));
+      materials = new uint16[nTriangles ? nTriangles : 1];
+      gf.read(materials, nTriangles * sizeof(uint16)); // read only the aligned element bytes, not the raw chunk size
     }
     else if (fourcc == "MOVI") {
       //      Vertex indices for triangles. Three 16-bit integers per triangle, that are indices into the vertex list. The numbers specify the 3 vertices for each triangle, their order makes it possible to do backface culling.
@@ -161,15 +178,14 @@ void WMOGroup::initDisplayList()
     }
     else if (fourcc == "MOVT") {
       //      Vertices chunk. 3 floats per vertex, the coordinates are in (X,Z,-Y) order. It's likely that WMOs and models (M2s) were created in a coordinate system with the Z axis pointing up and the Y axis into the screen, whereas in OpenGL, the coordinate system used in WoWmapview the Z axis points toward the viewer and the Y axis points up. Hence the juggling around with coordinates.
-      nVertices = (size / 12);
-      // let's hope it's padded to 12 bytes, not 16...
-      vertices = new glm::vec3[nVertices];
-      gf.read(vertices, size);
+      nVertices = (uint32)(size / sizeof(glm::vec3));
+      vertices = new glm::vec3[nVertices ? nVertices : 1];
+      gf.read(vertices, nVertices * sizeof(glm::vec3)); // exactly the allocated bytes
       vmin = glm::vec3(9999999.0f, 9999999.0f, 9999999.0f);
       vmax = glm::vec3(-9999999.0f, -9999999.0f, -9999999.0f);
       rad = 0;
       for (size_t i = 0; i < nVertices; i++) {
-        glm::vec3 v(vertices[i].x, vertices[i].z, -vertices[i].y);
+        glm::vec3 v = vertices[i]; // direct (Z-up), matching the render path + M2
         if (v.x < vmin.x) vmin.x = v.x;
         if (v.y < vmin.y) vmin.y = v.y;
         if (v.z < vmin.z) vmin.z = v.z;
@@ -182,15 +198,15 @@ void WMOGroup::initDisplayList()
     }
     else if (fourcc == "MONR") {
       // Normals. 3 floats per vertex normal, in (X,Z,-Y) order.
-      uint32 tSize = (uint32)(size / 12);
-      normals = new glm::vec3[tSize];
-      gf.read(normals, size);
+      uint32 tSize = (uint32)(size / sizeof(glm::vec3));
+      normals = new glm::vec3[tSize ? tSize : 1];
+      gf.read(normals, tSize * sizeof(glm::vec3));
     }
     else if (fourcc == "MOTV") {
       // Texture coordinates, 2 floats per vertex in (X,Y) order. The values range from 0.0 to 1.0. Vertices, normals and texture coordinates are in corresponding order, of course.
-      uint32 tSize = (uint32)(size / 8);
-      texcoords = new glm::vec2[tSize];
-      gf.read(texcoords, size);
+      uint32 tSize = (uint32)(size / sizeof(glm::vec2));
+      texcoords = new glm::vec2[tSize ? tSize : 1];
+      gf.read(texcoords, tSize * sizeof(glm::vec2));
     }
     else if (fourcc == "MOLR") {
       //      Light references, one 16-bit integer per light reference.
@@ -264,9 +280,9 @@ void WMOGroup::initDisplayList()
       //      0x1    Unknown
       //      0x4    Unknown
 
-      nBatches = (uint32)(size / 24);
-      batches = new WMOBatch[nBatches];
-      gf.read(batches, size);
+      nBatches = (uint32)(size / sizeof(WMOBatch));
+      batches = new WMOBatch[nBatches ? nBatches : 1];
+      gf.read(batches, nBatches * sizeof(WMOBatch));
 
       //      // batch logging
       //      gLog("\nWMO group #%d - %s\nVertices: %d\nTriangles: %d\nIndices: %d\nBatches: %d\n",
@@ -300,8 +316,12 @@ void WMOGroup::initDisplayList()
 
       // Temp, until we get this fully working.
       gf.seek(spos);
-      VertexColors = new WMOVertColor[nVertices];
-      gf.read(VertexColors, size);
+      // Size THIS array from the MOCV chunk itself, not from nVertices: the two can differ
+      // (or nVertices may not be set yet if MOCV precedes MOVT), and reading the raw chunk
+      // size into an nVertices-sized buffer overran the heap.
+      const uint32 nColors = (uint32)(size / sizeof(WMOVertColor));
+      VertexColors = new WMOVertColor[nColors ? nColors : 1];
+      gf.read(VertexColors, nColors * sizeof(WMOVertColor));
       //      for (size_t x=0;x<nVertices;x++){
       //        WMOVertColor vc;
       //        gf.read(&vc,4);
@@ -340,22 +360,23 @@ void WMOGroup::initDisplayList()
 
   // assume that texturing is on, for unit 1
 
-  IndiceToVerts = new uint32[nIndices];
-
   for (size_t b = 0; b<nBatches; b++) {
     WMOBatch *batch = &batches[b];
-    WMOMaterial *mat = &wmo->mat[batch->texture];
 
-    // build indice to vert array.
-    for (size_t i = 0; i <= batch->indexCount; i++){
-      size_t a = indices[batch->indexStart + i];
-      for (size_t j = batch->vertexStart; j <= batch->vertexEnd; j++){
-        if (vertices[a] == vertices[j]){
-          IndiceToVerts[batch->indexStart + i] = j;
-          break;
-        }
-      }
-    }
+    // Resolve the batch's material index. Modern WMOs (8.1+) can have >256 materials, so when
+    // batch flag 0x2 is set the index is the 16-bit value in the second bounding box (a[5] ==
+    // possibleBox2[2]); otherwise it's the 8-bit 'texture' field. Matches wow.export:
+    //   matID = (flags & 2) ? possibleBox2[2] : materialID
+    // Using the 8-bit field unconditionally bound the wrong material -> wrong textures.
+    const uint32 matID = (batch->flags & 0x2) ? batch->a[5] : batch->texture;
+    if (matID >= wmo->nTextures)
+      continue; // out-of-range material id -> skip (don't index wmo->mat out of bounds)
+    WMOMaterial *mat = &wmo->mat[matID];
+
+    // NOTE: a dead "build IndiceToVerts" loop used to live here. The array was allocated and
+    // written but never read anywhere, and its `i <= batch->indexCount` bound wrote one element
+    // past `new uint32[nIndices]` (for the last batch, index nIndices) -- the exact heap
+    // corruption that crashed on retail WMOs. wow.export has no such mapping; removed entirely.
 
     // setup texture
     glBindTexture(GL_TEXTURE_2D, mat->tex);
@@ -391,13 +412,16 @@ void WMOGroup::initDisplayList()
     // render
     glBegin(GL_TRIANGLES);
     for (size_t t = 0, i = batch->indexStart; t<batch->indexCount; t++, i++) {
-      int a = indices[i];
-      if (indoor && hascv) {
+      if (i >= nIndices) break;          // batch index range runs past the index buffer
+      uint32 a = indices[i];
+      if (a >= nVertices) continue;      // bad vertex index -> skip (no out-of-bounds read)
+      if (indoor && hascv && cv)
         setGLColor(cv[a]);
-      }
-      glNormal3f(normals[a].x, normals[a].z, -normals[a].y);
-      glTexCoord2fv(glm::value_ptr(texcoords[a]));
-      glVertex3f(vertices[a].x, vertices[a].z, -vertices[a].y);
+      if (normals)
+        glNormal3f(normals[a].x, normals[a].y, normals[a].z);
+      if (texcoords)
+        glTexCoord2fv(glm::value_ptr(texcoords[a]));
+      glVertex3f(vertices[a].x, vertices[a].y, vertices[a].z); // direct Z-up, matching M2
     }
     glEnd();
 

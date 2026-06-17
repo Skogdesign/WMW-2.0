@@ -29,7 +29,11 @@
 
 #include "glm/glm.hpp"
 
+#include <QString>
+
 class SettingsControl;
+
+namespace core { class GameConfig; }
 
 namespace WMVLog
 {
@@ -121,6 +125,7 @@ public:
   // Wrapper function for character stuff (forwards events to charcontrol)
   void OnSetEquipment(wxCommandEvent &event);
   void OnCharToggle(wxCommandEvent &event);
+  void OnImportNPCFromURL(wxCommandEvent &event);  // direct "Import NPC from URL" menu entry
 
   void OnMount(wxCommandEvent &event);
   void OnSave(wxCommandEvent &event);
@@ -141,7 +146,11 @@ public:
 
   void OnGameToggle(wxCommandEvent &event);
   void OnViewLog(wxCommandEvent &event);
-  void LoadWoW();
+  // chosenConfig/profileOverride come from the startup Client Choice launcher; both null/empty
+  // means "auto" (detect configs + derive the profile from the version), the headless default.
+  // showProgress displays the "Loading Client" progress dialog during the (synchronous) load.
+  void LoadWoW(const core::GameConfig * chosenConfig = 0, const QString & profileOverride = QString(),
+               bool showProgress = false);
 
 };
 

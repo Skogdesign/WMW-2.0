@@ -9,6 +9,7 @@
 #define _CASCFOLDER_H_
 
 #include <vector>
+#include <unordered_set>
 
 typedef void* HANDLE;
 
@@ -36,7 +37,11 @@ class _CASCFOLDER_API_ CASCFolder
 
     std::vector<core::GameConfig> configsFound() { return m_configs; }
     bool setConfig(core::GameConfig config);
-    
+
+    // Optional progress callback (fraction 0..1) invoked while enumerating present files in
+    // setConfig() -- the "opening game data" step -- so the loading UI can advance during it.
+    void setProgressCallback(const std::function<void(float)> & cb) { m_progressCb = cb; }
+
     int lastError() { return m_openError; }
 
     bool fileExists(int id);
@@ -53,6 +58,7 @@ class _CASCFOLDER_API_ CASCFolder
     void initVersion();
     void initBuildInfo();
     void addExtraEncryptionKeys();
+    void buildPresentIdIndex();  // one-shot enumeration of present FileDataIDs -> fast fileExists()
 
     int m_currentCascLocale;
     core::GameConfig m_currentConfig;
@@ -62,6 +68,8 @@ class _CASCFOLDER_API_ CASCFolder
     HANDLE hStorage;
 
     std::vector<core::GameConfig> m_configs;
+    std::unordered_set<int> m_presentIds;  // every present FileDataID (filled by buildPresentIdIndex)
+    std::function<void(float)> m_progressCb; // optional load-progress reporter (see setProgressCallback)
 };
 
 

@@ -228,6 +228,7 @@ bool WowModelViewApp::OnInit()
   // TODO: Improve this feature and expand on it.
   // Command arguments
   QString cmd;
+  QString snapModelPath; // -mo: defer load+screenshot until after LoadWoW
   for (int i = 0; i<argc; i++) {
     cmd = QString::fromWCharArray(argv[i]);
 
@@ -245,20 +246,16 @@ bool WowModelViewApp::OnInit()
       }
     }
     else if (cmd == "-mo") {
-      if (i + 1 < argc) {                                                       
+      if (i + 1 < argc) {
         i++;
         QString fn = QString::fromWCharArray(argv[i]);
 
         if (!fn.endsWith("2")) // Its not an M2 file, exit
           break;
 
-        // If its a character model, give it some skin.
-        // Load the model
-        frame->LoadModel(GAMEDIRECTORY.getFile(fn));
-
-        // Output the screenshot
-        fn = "ss_" + fn.replace('\\', '_') + ".png";
-        frame->canvas->Screenshot(fn.toStdWString());
+        // Defer load + screenshot until AFTER LoadWoW() below -- the game data
+        // must be loaded before a model can be resolved/composed.
+        snapModelPath = fn;
       }
     }
     else if (cmd == "-dbfromfile") {
@@ -320,6 +317,13 @@ bool WowModelViewApp::OnInit()
   if (headlessLoad)
   {
     frame->LoadWoW(); // auto-pick config + profile, no prompt
+    if (!snapModelPath.isEmpty())
+    {
+      frame->LoadModel(GAMEDIRECTORY.getFile(snapModelPath));
+      QString out = "ss_" + QString(snapModelPath).replace('\\', '_').replace('/', '_') + ".png";
+      frame->canvas->Screenshot(out.toStdWString());
+      return false; // headless capture done -> exit
+    }
   }
   else
   {

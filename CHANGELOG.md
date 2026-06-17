@@ -3,6 +3,36 @@
 All notable changes to **WoW Model Viewer: Midnight** are recorded here.
 Format loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.2.1] — 2026-06-17
+
+Hotfix for the current retail client (**12.0.7.68235**), whose database layout is newer
+than what 0.2.0 was built against. Several tables' DB2 field positions were stale on this
+build, so columns were mis-read — which is what made characters and the race tree look
+broken in 0.2.0.
+
+### Fixed
+- **Character models render correctly again.** On 0.2.0 characters loaded untextured (white)
+  or with scrambled customization (missing hair/face, stray black bands). Two causes, both
+  fixed: (1) a "nearest known build" schema fallback mis-read several tables on a client
+  newer than the bundled definitions — reverted in favour of the curated positions; and
+  (2) `ChrCustomizationReq` — which gates *which customization choices apply to a model's
+  race/class* — changed layout in 12.0.7, so its race mask read a string offset as garbage
+  and the gating broke, letting wrong choices (e.g. horns on a Blood Elf) leak onto every
+  character. Its `RaceMask`/`ClassMask` positions are corrected for the new layout.
+- **The Characters tree lists named races again.** `ChrRaces` failed to populate on this
+  build — two fields had no position and several fell out of range, so the row insert failed
+  and the table came up empty, collapsing every race into one blank node. Positions corrected;
+  Playable/NPC races now list with their Male/Female models.
+- **Creatures: correct skin textures and geosets.** `CreatureDisplayInfo.TextureVariationFileDataID`
+  (creature skins) and `CreatureModelData.CreatureGeosetDataID` (extra geosets) were read at
+  stale positions and returned garbage on this build; both are corrected (the runtime/installer
+  copy of the 12.0 schema is now in sync with the tracked one, which is what had drifted).
+
+### Changed
+- The headless `-mo <model>` screenshot CLI now loads the model after the game data is ready
+  (it previously ran before load and produced nothing), so automated render checks work.
+
+
 ## [0.2.0] — 2026-06-17
 
 ### Added

@@ -48,17 +48,17 @@
   <table name="ChrRaces">
     <field type="int32" name="ID" primary="yes" />
     <field type="text" name="ClientPrefix" pos="0" />
-    <field type="text" name="ClientFileString" />
-    <field type="text" name="Name_lang" />
+    <field type="text" name="ClientFileString" pos="1" />
+    <field type="text" name="Name_lang" pos="2" />
     <field type="int32" name="Flags" pos="15" />
-    <field type="int32"  name="MaleModelFallbackRaceID" pos="33" />
-	<field type="int32"  name="FemaleModelFallbackRaceID" pos="34" />
-	<field type="int32"  name="MaleTextureFallbackRaceID" pos="35" />
-	<field type="int32"  name="FemaleTextureFallbackRaceID" pos="36" />
-    <field type="int8"  name="MaleModelFallbackSex" pos="48" />
-    <field type="int8"  name="FemaleModelFallbackSex" pos="49" />
-    <field type="int8"  name="MaleTextureFallbackSex" pos="50" />
-    <field type="int8"  name="FemaleTextureFallbackSex" pos="51" />
+    <field type="int32"  name="MaleModelFallbackRaceID" pos="41" />
+	<field type="int32"  name="FemaleModelFallbackRaceID" pos="43" />
+	<field type="int32"  name="MaleTextureFallbackRaceID" pos="45" />
+	<field type="int32"  name="FemaleTextureFallbackRaceID" pos="47" />
+    <field type="int8"  name="MaleModelFallbackSex" pos="42" />
+    <field type="int8"  name="FemaleModelFallbackSex" pos="44" />
+    <field type="int8"  name="MaleTextureFallbackSex" pos="46" />
+    <field type="int8"  name="FemaleTextureFallbackSex" pos="48" />
   </table>
   <table name="ChrRaceXChrModel">
     <field type="int32" name="ID" primary="yes" />

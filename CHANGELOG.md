@@ -3,6 +3,28 @@
 All notable changes to **WoW Model Viewer: Midnight** are recorded here.
 Format loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.2.3] — 2026-06-18
+
+Fixes for issues reported after the public 0.2.2 release.
+
+### Fixed
+- **New races (Haranir, and other recent forms) now show their customization options.** The
+  customization panel filtered options with `ChrCustomizationID != 0` but — unlike the data path —
+  had no fallback when that returned nothing, and ~21 ChrModels (Haranir, Dracthyr visage, etc.)
+  have options that all carry `ChrCustomizationID 0`, so they showed only the Randomise button.
+  The panel now falls back to the unfiltered option set for those models (other races unchanged).
+- **Armor shows up in the item browser again.** Most items (especially newer armor) were missing
+  from the picker because `ItemSparse` — a sparse table read by walking the record field by field —
+  had a stale leading field (a fake `AllowableRace`) for the 12.0.7 layout, which shifted the walk
+  and left the item *name* (`Display_Lang`) empty for most items; the picker hides unnamed items.
+  Corrected the `ItemSparse` field positions: item names read correctly again and the picker now
+  lists ~110,000 equippable items (was ~9,500).
+- **Armory import now applies skin and hair colour.** Skin/hair colour options are parent/child
+  linked and their textures are related-gated, so applying the imported choices in a single pass
+  (in the API's arbitrary order) left a stale default colour on the face/hair. The importer now
+  re-resolves the imported choices in a second pass so the colours match the imported character.
+
+
 ## [0.2.2] — 2026-06-17
 
 Packaging hotfix for 0.2.1. The 0.2.1 **installer** shipped a stale build-staging copy of the

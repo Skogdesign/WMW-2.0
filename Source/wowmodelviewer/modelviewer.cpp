@@ -2605,7 +2605,16 @@ void ModelViewer::ImportArmoury(wxString strURL)
       wxMessageBox(wxT("We found Transmogrified gear on your character. The items your character is wearing will be exchanged for the items they look like."), wxT("Transmog Notice"));
     }
 
-    // Update the model
+    // Apply the imported customizations. Skin/hair COLOUR options are parent/child-linked
+    // (Face->SkinColor, HairStyle->HairColor) and their textures are related-gated, so resolving
+    // a colour depends on its linked partner's current value. The appearance API returns the
+    // choices in an arbitrary order, and a single in-order pass can leave a stale, default-
+    // resolved colour texture in the parent option's bucket (geometry survives because it comes
+    // from direct, non-related elements -- which is exactly why geometry was right but colour
+    // wrong). Apply all choices, then re-resolve them in a second pass so every colour is
+    // resolved against the final value of its partner (same idea as reset()/setDemonHunterMode).
+    for (const auto& customization : result->customizations)
+      g_charControl->model->cd.set(customization.first, customization.second);
     for (const auto& customization : result->customizations)
       g_charControl->model->cd.set(customization.first, customization.second);
 

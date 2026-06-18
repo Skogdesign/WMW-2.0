@@ -242,13 +242,20 @@
     <field type="int8" name="SubClassID" pos="4" />
   </table>
   <table name="ItemSparse">
+    <!-- ItemSparse is a SPARSE table: the loader reads its strings by walking the record field
+         by field, so the fields listed here must match the real record's leading order/types.
+         On the 12.0.7 layout (1C17D17F, non-inline ID) the record begins with these five
+         localized string fields at record indices 0..4; there is no AllowableRace uint64 in
+         front. The old fake AllowableRace at pos 0 shifted the walk by 8 phantom bytes, which
+         front truncated every name into Description_lang and left Display_Lang empty, so the
+         item picker (which requires a non empty Display_Lang) hid most armor. AllowableRace is
+         not read anywhere in the code, so it is removed and the strings sit at real positions. -->
     <field type="int32" name="ID" primary="yes" />
-    <field type="uint64" name="AllowableRace" pos="0" /> <!-- This should be int64, but some completely unknown reason, changing it or removing it breaks item names in lists -->
-    <field type="text" name="Description_lang" pos="1" />
-    <field type="text" name="Display3_Lang" pos="2" />
-    <field type="text" name="Display2_Lang" pos="3" />
-    <field type="text" name="Display1_Lang" pos="4" />
-    <field type="text" name="Display_Lang" pos="5" />
+    <field type="text" name="Description_lang" pos="0" />
+    <field type="text" name="Display3_Lang" pos="1" />
+    <field type="text" name="Display2_Lang" pos="2" />
+    <field type="text" name="Display1_Lang" pos="3" />
+    <field type="text" name="Display_Lang" pos="4" />
   </table>
   <table name="ItemAppearance">
     <field type="int32" name="ID" primary="yes" />

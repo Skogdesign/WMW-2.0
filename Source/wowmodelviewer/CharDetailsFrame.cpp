@@ -60,9 +60,18 @@ void CharDetailsFrame::setModel(WoWModel * model)
   charCustomizationGS_->Clear(true);
 
   const auto infos = model_->infos;
-  
- 
+  if (infos.ChrModelID.empty())
+    return;
+
   auto options = GAMEDATABASE.sqlQuery(QString("SELECT ID FROM ChrCustomizationOption WHERE ChrModelID = %1 AND ChrCustomizationID != 0 ORDER BY OrderIndex").arg(infos.ChrModelID[0]));
+
+  // Some ChrModels (Haranir 200/201, Dracthyr visage 127, ~21 newer forms) have EVERY option
+  // with ChrCustomizationID == 0, so the filtered query returns nothing and the panel shows no
+  // dropdowns (only Randomise). Fall back to the unfiltered option set in that case only -- this
+  // mirrors the data-model path in CharDetails::fillCustomizationMap, so models that do have
+  // ChrCustomizationID-tagged options keep their exact prior behaviour (no regression).
+  if (!options.valid || options.values.empty())
+    options = GAMEDATABASE.sqlQuery(QString("SELECT ID FROM ChrCustomizationOption WHERE ChrModelID = %1 ORDER BY OrderIndex").arg(infos.ChrModelID[0]));
 
   if(options.valid && !options.values.empty())
   {

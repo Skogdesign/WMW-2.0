@@ -63,7 +63,7 @@ core::GlobalSettings::GlobalSettings()
 {
   m_versionMajorNumber = 0;
   m_versionMinorNumber = 2;
-  m_versionRevNumber = 4;
+  m_versionRevNumber = 5;
 
   m_appName = L"WoW Model Viewer Midnight";
   m_buildName = L"Midnight";

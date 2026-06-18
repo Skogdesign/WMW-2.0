@@ -70,7 +70,14 @@ void RaceInfos::init()
       infos.nameLang = race[16].toStdString();
     infos.isNPC = ((race[2].toInt() & 1) != 0) && infos.raceID != 23 && infos.raceID != 75;
 
-    infos.isHD = GAMEDIRECTORY.getFile(modelfileid)->fullname().contains("_hd") ? true : false;
+    // modelfileid comes from a CreatureDisplayInfo -> CreatureModelData join. If those tables
+    // didn't populate cleanly (e.g. a DB2 layout mismatch on an unexpected client build), the id
+    // can be 0/invalid and getFile() returns null -- dereferencing it here crashed the whole app
+    // on startup. Skip such races instead.
+    GameFile * modelFile = GAMEDIRECTORY.getFile(modelfileid);
+    if (!modelFile)
+      continue;
+    infos.isHD = modelFile->fullname().contains("_hd") ? true : false;
 
     if (RACES.find(modelfileid) == RACES.end())
     {

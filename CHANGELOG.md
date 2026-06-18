@@ -3,6 +3,20 @@
 All notable changes to **WoW Model Viewer: Midnight** are recorded here.
 Format loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.2.5] — 2026-06-18
+
+### Fixed
+- **No longer crashes on startup with some WoW installs.** On a client whose DB2 layout didn't
+  match the expected field positions — seen with multi-version installs that share one Data
+  folder (Retail + Classic + Cata, etc.), where the data read for the chosen build can be
+  mismatched — a table (e.g. `CreatureDisplayInfo`) could fail to populate, leaving an invalid
+  model id that `RaceInfos::init` then dereferenced as a null file → hard crash on load. Two
+  hardening fixes: the DB2 reader now emits a default value when a field position is out of range
+  for a record (so a layout mismatch degrades a single column instead of failing the whole table),
+  and race-info init skips any entry whose model file can't be resolved instead of dereferencing
+  null. WMV now loads instead of crashing on such installs.
+
+
 ## [0.2.4] — 2026-06-18
 
 ### Fixed

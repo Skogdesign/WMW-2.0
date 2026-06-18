@@ -563,7 +563,15 @@ std::vector<std::string> WDC3File::get(unsigned int recordIndex, const core::Tab
     {
       unsigned int val = 0;
       if (!readFieldValue(recordIndex, field->pos, i, field->arraySize, val))
+      {
+        // The field position is out of range for this record's actual layout (a build whose DB2
+        // layout doesn't match the curated positions). Emit a default so the row still has one
+        // value per column -- otherwise the INSERT gets fewer values than columns and the ENTIRE
+        // table fails to fill, which then cascades (e.g. an empty CreatureDisplayInfo left a bad
+        // model id that crashed RaceInfos::init on startup).
+        result.push_back(field->type == "text" ? "" : "0");
         continue;
+      }
 
       if (field->type == "text")
       {

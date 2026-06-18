@@ -10,7 +10,7 @@
 ; Output:   installer\dist\WoWModelViewerMidnight-Setup.exe
 
 #define MyAppName "WoW Model Viewer Midnight"
-#define MyAppVersion "0.2.3"
+#define MyAppVersion "0.2.4"
 #define MyAppPublisher "Skogdesign"
 #define MyAppExeName "wowmodelviewer.exe"
 #define Rel "..\build\Source\wowmodelviewer\Release"

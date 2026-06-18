@@ -802,9 +802,14 @@ void CharDetails::refreshGeosets()
   // 35xx earrings). This map only records explicit toggles and customization
   // choices, which override those defaults via setGeosetGroupDisplay().
 
-  if (showEars)
-    geosets[CG_EARS] = 2;
-  else
+  // Ear shape is a per-race customization option (geoset group CG_EARS = 7) resolved
+  // selectively by applyCustomizationGeosets(). The cd.geosets map is applied AFTER
+  // customization (so explicit UI toggles win), so pinning CG_EARS to a fixed variant here
+  // clobbered the chosen ear geoset -- e.g. Haranir's "Ears" option (Small/Droopy/Medium/Large,
+  // geosets 702-705) had no effect because this forced group 7 back to variant 2 every refresh.
+  // Only force the ears OFF when they must be hidden; when shown, leave group 7 to the active
+  // Ears choice (or the default *01 rule for races that have no Ears option).
+  if (!showEars)
     geosets[CG_EARS] = 0;
 
   // The facial-feature groups (1/2/3) carry facial hair, which is now a

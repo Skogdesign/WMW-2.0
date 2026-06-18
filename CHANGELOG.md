@@ -3,6 +3,17 @@
 All notable changes to **WoW Model Viewer: Midnight** are recorded here.
 Format loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [0.2.4] — 2026-06-18
+
+### Fixed
+- **Ear-shape customization works again (Haranir and other races).** The "Ears" option had no
+  effect and the ears looked wrong, because a hardcoded ear default (`CG_EARS = 2`) was applied
+  to the ear geoset group *after* the customization-choice geosets — clobbering the selected ear
+  shape on every refresh. The hardcoded force is removed (the ear hide-toggle is kept), so the
+  active Ears choice (geosets 702–705) now drives the ear shape and updates when you change it.
+  Verified Haranir and Blood Elf ears render correctly.
+
+
 ## [0.2.3] — 2026-06-18
 
 Fixes for issues reported after the public 0.2.2 release.

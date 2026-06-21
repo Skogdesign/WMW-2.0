@@ -10,10 +10,11 @@
 ; Output:   installer\dist\WoWModelViewerMidnight-Setup.exe
 
 #define MyAppName "WoW Model Viewer Midnight"
-#define MyAppVersion "0.2.5"
+#define MyAppVersion "0.3.0"
 #define MyAppPublisher "Skogdesign"
 #define MyAppExeName "wowmodelviewer.exe"
-#define Rel "..\build\Source\wowmodelviewer\Release"
+; 0.3.0 is the 64-bit build: source the x64 Release tree (build64).
+#define Rel "..\build64\Source\wowmodelviewer\Release"
 #define IconsDir "..\bin_support\Icons"
 
 #define MyAppURL "https://github.com/Skogdesign/WMW-2.0"
@@ -41,7 +42,9 @@ UninstallDisplayIcon={app}\{#MyAppExeName}
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
-ArchitecturesInstallIn64BitMode=
+; 0.3.0 ships a 64-bit application: install into the 64-bit Program Files and require x64 Windows.
+ArchitecturesAllowed=x64
+ArchitecturesInstallIn64BitMode=x64
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

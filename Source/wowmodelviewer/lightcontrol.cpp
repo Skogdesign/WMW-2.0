@@ -70,7 +70,7 @@ LightControl::LightControl(wxWindow* parent, wxWindowID id)
   wxArrayString choices;
   for (size_t i=1; i<=MAX_LIGHTS; i++) {
     wxString s = wxT("Light ");
-    s += wxString::Format(wxT("%i"), i);
+    s += wxString::Format(wxT("%i"), (int)i);
 
     choices.Add(s);
   }

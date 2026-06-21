@@ -87,6 +87,16 @@ void WowModelViewApp::setInterfaceLocale()
 #endif
 }
 
+void WowModelViewApp::OnAssertFailure(const wxChar *file, int line, const wxChar *func, const wxChar *cond, const wxChar *msg)
+{
+  // wxWidgets 3.x leaves asserts enabled in release builds and shows a modal dialog by default,
+  // which blocks a headless run and is the wrong UX for end users. Record the assert and carry on.
+  LOG_ERROR << "wxAssert:" << QString::fromWCharArray(cond ? cond : L"")
+            << "|" << QString::fromWCharArray(msg ? msg : L"")
+            << "@" << QString::fromWCharArray(file ? file : L"") << ":" << line
+            << QString::fromWCharArray(func ? func : L"");
+}
+
 bool WowModelViewApp::OnInit()
 {
   bool displayConsole = false;

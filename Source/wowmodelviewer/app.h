@@ -51,6 +51,8 @@ public:
   virtual int OnExit();
   virtual void OnUnhandledException();
   virtual void OnFatalException();
+  // wx 3.x keeps asserts on in release and pops a modal dialog by default; log + continue instead.
+  virtual void OnAssertFailure(const wxChar *file, int line, const wxChar *func, const wxChar *cond, const wxChar *msg);
   void setInterfaceLocale();
 
   //virtual bool OnExceptionInMainLoop();

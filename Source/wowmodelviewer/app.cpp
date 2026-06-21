@@ -76,7 +76,7 @@ void WowModelViewApp::setInterfaceLocale()
 
   if (wxFileExists(fn))
   {
-    locale.Init(langIds[interfaceID], wxLOCALE_CONV_ENCODING);
+    locale.Init(langIds[interfaceID]);
 
     wxLocale::AddCatalogLookupPathPrefix(wxT("localisation"));
     //wxLocale::AddCatalogLookupPathPrefix(wxT(".."));

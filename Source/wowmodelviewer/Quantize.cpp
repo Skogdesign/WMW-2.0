@@ -2,6 +2,7 @@
 #ifdef _WINDOWS
 #include <windows.h>
 #endif
+#include <stdlib.h> // calloc/free - not pulled in transitively under WIN32_LEAN_AND_MEAN
 
 #include "Quantize.h"
 /////////////////////////////////////////////////////////////////////////////

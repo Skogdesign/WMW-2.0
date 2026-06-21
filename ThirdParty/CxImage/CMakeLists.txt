@@ -47,12 +47,21 @@ if (${CMAKE_SYSTEM_NAME} STREQUAL Linux)
 endif()
 
 if (WIN32)
+  if(WMV_X64)
+    # x64: vcpkg-provided png/jpeg/zlib headers (version-matched to the libs below)
+    include_directories(${WMV_VCPKG_X64}/include)
+  else()
     include_directories(${CMAKE_SOURCE_DIR}/ThirdParty/include)
+  endif()
   add_definitions(-D_WINDOWS)
   add_definitions(-D_WIN32)
 endif()
 
 add_library(cximage STATIC ${SRC_FILES})
 set_property(TARGET cximage PROPERTY FOLDER "ThirdParty libraries")
-target_link_libraries(cximage ${CMAKE_SOURCE_DIR}/ThirdParty/lib/jpeg.lib 
-  ${CMAKE_SOURCE_DIR}/ThirdParty/lib/libpng.lib)
+if(WMV_X64)
+  target_link_libraries(cximage ${WMV_VCPKG_X64}/lib/jpeg.lib ${WMV_VCPKG_X64}/lib/libpng16.lib)
+else()
+  target_link_libraries(cximage ${CMAKE_SOURCE_DIR}/ThirdParty/lib/jpeg.lib
+    ${CMAKE_SOURCE_DIR}/ThirdParty/lib/libpng.lib)
+endif()

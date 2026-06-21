@@ -2,13 +2,37 @@ cmake_minimum_required(VERSION 3.16)
 project(WoWModelViewer)
 
 # Dependencies.
+# Select 32-bit vs 64-bit toolchain by the generator platform (-A Win32 | -A x64). The x64 build
+# uses x64 Qt + wxWidgets 3.x + vcpkg natives; the Win32 build keeps the original 32-bit deps so
+# both stay buildable from the same tree.
+if(CMAKE_GENERATOR_PLATFORM STREQUAL "x64")
+  set(WMV_X64 ON)
+  set(WMV_VCPKG_X64 "C:/Users/Rasmus Lund/vcpkg/installed/x64-windows")
+  # static GLEW (libglew32.lib, /MD CRT) -- avoids the dynamic import-lib symbol mismatch; matches
+  # the proven 32-bit static-GLEW setup.
+  set(WMV_VCPKG_X64_STATIC "C:/Users/Rasmus Lund/vcpkg/installed/x64-windows-static-md")
+endif()
+
 # Qt5
-SET(QT_LOCATION C:/Qt/5.13.2/msvc2017)
+if(WMV_X64)
+  SET(QT_LOCATION C:/Qt/5.13.2/msvc2017_64)
+else()
+  SET(QT_LOCATION C:/Qt/5.13.2/msvc2017)
+endif()
 SET(CMAKE_PREFIX_PATH ${QT_LOCATION}/lib/cmake)
 find_package(Qt5 5.13.2 COMPONENTS Core Network Widgets Xml Gui REQUIRED)
 
 #wxwidgets
-SET(CMAKE_PREFIX_PATH ThirdParty/wxWidgets)
+if(WMV_X64)
+  # wxWidgets 3.2.x prebuilt x64 DLL build (vc14x). Point FindwxWidgets at its lib dir; it derives
+  # the rest (setup.h under <libdir>/mswu, WXUSINGDLL) from there.
+  SET(wxWidgets_ROOT_DIR ${CMAKE_SOURCE_DIR}/ThirdParty/wxWidgets3)
+  SET(wxWidgets_LIB_DIR ${CMAKE_SOURCE_DIR}/ThirdParty/wxWidgets3/lib/vc14x_x64_dll)
+  SET(wxWidgets_CONFIGURATION mswu)
+  SET(CMAKE_PREFIX_PATH ${CMAKE_SOURCE_DIR}/ThirdParty/wxWidgets3)
+else()
+  SET(CMAKE_PREFIX_PATH ThirdParty/wxWidgets)
+endif()
 SET(wxWidgets_USE_UNICODE ON)
 find_package(wxWidgets COMPONENTS net aui xml adv core base REQUIRED)
 # add wx widgets inclusions

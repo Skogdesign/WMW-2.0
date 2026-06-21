@@ -27,7 +27,11 @@
 	typedef unsigned __int16 uint16;
 	typedef unsigned __int32 uint32;
 	typedef unsigned __int64 uint64;
+#ifdef _WIN64
+	typedef __int64 ssize_t; // 64-bit; matches wx3's wxInt64 ssize_t so the typedefs are identical
+#else
 	typedef int ssize_t;
+#endif
 #else
   #include <stdint.h>
   typedef uint8_t uint8;

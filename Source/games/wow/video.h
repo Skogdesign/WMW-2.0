@@ -4,6 +4,9 @@
 #include <vector>
 #include "GL/glew.h"
 #include "GL/wglew.h"
+// GLEW 2.x no longer pulls in GLU automatically (older vendored GLEW did), so include it
+// explicitly for gluPerspective/gluLookAt etc. Present in the Windows SDK (32-bit) and vcpkg (x64).
+#include <GL/glu.h>
 
 #ifdef _WIN32
 #    ifdef BUILDING_WOW_DLL

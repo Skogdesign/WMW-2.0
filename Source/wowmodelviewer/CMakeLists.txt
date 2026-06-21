@@ -146,6 +146,15 @@ if(MSVC)
   set_target_properties(${NAME} PROPERTIES LINK_FLAGS "/LARGEADDRESSAWARE")
 endif()
 
+if(WMV_X64)
+  # GLEW (vcpkg 2.x) errors if any <GL/gl.h> is seen before <GL/glew.h>; wx and Qt both pull gl.h
+  # in, so force glew.h to the very top of every translation unit. WIN32_LEAN_AND_MEAN stops
+  # <windows.h> (dragged in by wx) from including the legacy winsock.h, which otherwise collides
+  # with the winsock2.h that Qt Network uses (fd_set/timeval redefinitions).
+  target_compile_definitions(${NAME} PRIVATE WIN32_LEAN_AND_MEAN)
+  target_compile_options(${NAME} PRIVATE "/FIGL/glew.h")
+endif()
+
 set(BIN_DIR "${CMAKE_SOURCE_DIR}/bin/")
 
 target_link_libraries(${NAME}

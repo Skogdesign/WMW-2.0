@@ -3,9 +3,13 @@
 All notable changes to **WoW Model Viewer: Midnight** are recorded here.
 Format loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
-## [Unreleased] — targeting 0.3.0
+## [0.3.0] — 2026-06-21
 
 ### Added
+- **WoW Model Viewer is now a 64-bit application.** The viewer was rebuilt for 64-bit Windows
+  (its interface toolkit upgraded to wxWidgets 3.2), lifting the old ~4 GB memory ceiling so the
+  large modern listfile and the in-memory database have plenty of room. OBJ and FBX export both
+  continue to work.
 - **Automatic file-list updates.** The list WMV uses to resolve model and texture paths by name is
   now refreshed automatically from the current community listfile (at most once a week), so files
   added by new client patches resolve without any manual maintenance. It runs quietly behind the

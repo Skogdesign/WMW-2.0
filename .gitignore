@@ -29,3 +29,7 @@ installer/dist
 
 # aqt Qt-download log
 aqtinstall.log
+
+/ThirdParty/fbx_x64
+/ThirdParty/ossl_build
+/ThirdParty/openssl_x64

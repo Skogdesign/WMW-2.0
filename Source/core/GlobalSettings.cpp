@@ -62,8 +62,8 @@ core::GlobalSettings * core::GlobalSettings::m_instance = 0;
 core::GlobalSettings::GlobalSettings()
 {
   m_versionMajorNumber = 0;
-  m_versionMinorNumber = 2;
-  m_versionRevNumber = 5;
+  m_versionMinorNumber = 3;
+  m_versionRevNumber = 0;
 
   m_appName = L"WoW Model Viewer Midnight";
   m_buildName = L"Midnight";
@@ -108,7 +108,11 @@ core::GlobalSettings::GlobalSettings()
    */
 
   // platform
+#ifdef _WIN64
+  m_platform = L"64 bits";
+#else
   m_platform = L"32 bits";
+#endif
 
 #if _BETAVERSION > 0
   m_isBetaVersion = true;

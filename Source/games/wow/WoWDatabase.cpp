@@ -75,6 +75,47 @@ void wow::WoWDatabase::readSpecificFieldAttributes(QDomElement & e, core::FieldS
     field->isRelationshipData = true;
 }
 
+// Read a DB2's layout_hash (the fingerprint of its record structure) straight from the file
+// header. Keying the WoWDBDefs match on this instead of the client build string lets a brand-new
+// client build -- whose version string isn't in the bundled defs yet -- still resolve to the
+// correct field layout automatically, as long as that structure is a known one. Returns 0 for a
+// missing file or a non-WDC table (older WDB/DBC keep the field elsewhere and fall back to build
+// matching), in which case the caller behaves exactly as before.
+static uint32 readDB2LayoutHash(const QString & file)
+{
+  GameFile * f = 0;
+  for (unsigned int i = 0; i < POSSIBLE_DB_EXT.size(); i++)
+  {
+    f = GAMEDIRECTORY.getFile("DBFilesClient\\" + file + POSSIBLE_DB_EXT[i]);
+    if (f)
+      break;
+  }
+  if (!f)
+    return 0;
+
+  uint32 layoutHash = 0;
+  if (f->open(false))
+  {
+    // WDC1-4 keep layout_hash at byte offset 24 (magic[4] + 5 x uint32). WDC5 (WoW 11.0+) inserts
+    // a preamble right after the magic -- a uint32 version + a 128-byte build string -- which
+    // pushes the same field to offset 156. Read enough to cover both and pick by the format digit.
+    unsigned char head[160];
+    const size_t n = f->read(head, sizeof(head));
+    if (n >= 28 && head[0] == 'W' && head[1] == 'D' && head[2] == 'C')
+    {
+      if (head[3] == '5')
+      {
+        if (n >= 160)
+          layoutHash = *reinterpret_cast<uint32 *>(head + 156);
+      }
+      else
+        layoutHash = *reinterpret_cast<uint32 *>(head + 24);
+    }
+    f->close();
+  }
+  return layoutHash;
+}
+
 void wow::WoWDatabase::refreshStructures(std::vector<core::TableStructure *> & tables)
 {
   // The shipped database.xml carries WMV's curated column NAMES/types (which the
@@ -110,11 +151,15 @@ void wow::WoWDatabase::refreshStructures(std::vector<core::TableStructure *> & t
       continue;
     }
 
-    // Match by build (layout hash matching would require pre-opening the DB2).
-    const wow::DBDDefinition * def = dbd.getStructure(build, 0);
+    // Match by the file's actual structure fingerprint first, then by build. Exact layout-hash
+    // matching means the chosen definition IS this file's real layout, so its field order is
+    // authoritative -- this is what lets a new client build self-correct without curated edits.
+    const uint32 fileHash = readDB2LayoutHash(tbl->file);
+    const wow::DBDDefinition * def = dbd.getStructure(build, fileHash);
     if (!def)
     {
-      LOG_WARNING << "DBD: no definition covering build" << build << "for table" << tbl->name << "- keeping base positions";
+      LOG_WARNING << "DBD: no definition for table" << tbl->name << "build" << build
+                  << "layoutHash" << fileHash << "- keeping base positions";
       continue;
     }
 
@@ -130,7 +175,7 @@ void wow::WoWDatabase::refreshStructures(std::vector<core::TableStructure *> & t
       idx++;
     }
 
-    int refreshed = 0, missing = 0;
+    int refreshed = 0, changed = 0, missing = 0;
     for (core::FieldStructure * cf : tbl->fields)
     {
       wow::FieldStructure * field = dynamic_cast<wow::FieldStructure *>(cf);
@@ -140,6 +185,13 @@ void wow::WoWDatabase::refreshStructures(std::vector<core::TableStructure *> & t
       auto it = nameToPos.find(field->name.toLower());
       if (it != nameToPos.end())
       {
+        if (field->pos != it.value())
+        {
+          // Surfaced so a regression on a known-good build is obvious: any change here means the
+          // resolved layout differs from the curated base position for this field.
+          LOG_INFO << "DBD:" << tbl->name << "field" << field->name << "pos" << field->pos << "->" << it.value();
+          changed++;
+        }
         field->pos = it.value();
         refreshed++;
       }
@@ -149,7 +201,8 @@ void wow::WoWDatabase::refreshStructures(std::vector<core::TableStructure *> & t
         LOG_WARNING << "DBD:" << tbl->name << "field" << field->name << "absent in build" << build << "- keeping pos" << field->pos;
       }
     }
-    LOG_INFO << "DBD refreshed" << tbl->name << "-" << refreshed << "fields updated," << missing << "unmatched";
+    LOG_INFO << "DBD refreshed" << tbl->name << "layoutHash" << fileHash << "-" << refreshed << "fields updated,"
+             << changed << "changed," << missing << "unmatched";
   }
 }
 

@@ -3,6 +3,33 @@
 All notable changes to **WoW Model Viewer: Midnight** are recorded here.
 Format loosely based on [Keep a Changelog](https://keepachangelog.com/).
 
+## [Unreleased] — targeting 0.3.0
+
+### Added
+- **Automatic file-list updates.** The list WMV uses to resolve model and texture paths by name is
+  now refreshed automatically from the current community listfile (at most once a week), so files
+  added by new client patches resolve without any manual maintenance. It runs quietly behind the
+  normal "Loading file list…" step, streams straight to disk, and silently keeps the existing list
+  on any problem (offline, server error, short download) so it can never break startup. There is
+  intentionally no setting for it — it just keeps itself current.
+
+### Fixed
+- **New client builds (e.g. the 12.1 PTR) now load characters correctly.** A build with no exact
+  `games/wow/<major>.<minor>/` data profile (only `12.0` ships) used to come up with an empty
+  database — no races, no models, the race dropdown collapsed to a single blank entry. WMV now
+  falls back to the newest available profile for the same major version, so a fresh patch works
+  without shipping a new profile folder for it. Verified on 12.1.0.68209: all 58 races, full item
+  and model data, no errors.
+
+### Changed
+- **Table layouts are now auto-detected per file.** Each DB2's column positions are matched by its
+  on-disk structure fingerprint (layout hash) rather than only by the client build string, so when
+  a new patch moves a column WMV corrects it automatically instead of needing a hand-edited schema.
+  On a known-good build this changes nothing (it reproduces the curated positions exactly); on a
+  newer build it self-heals. Curated positions remain the fallback for fields a definition doesn't
+  expose.
+
+
 ## [0.2.5] — 2026-06-18
 
 ### Fixed

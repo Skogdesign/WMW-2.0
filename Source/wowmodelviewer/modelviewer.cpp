@@ -35,8 +35,16 @@
 #include "logger/Logger.h"
 
 #include <QFile>
+#include <QFileInfo>
+#include <QDir>
+#include <QDateTime>
 #include <QSettings>
 #include <QXmlStreamWriter>
+#include <QNetworkAccessManager>
+#include <QNetworkRequest>
+#include <QNetworkReply>
+#include <QEventLoop>
+#include <QUrl>
 
 #include <fstream>
 
@@ -1719,6 +1727,75 @@ void ModelViewer::OnGameToggle(wxCommandEvent &event)
     LoadWoW();
 }
 
+// Quietly refresh the CASC file list so files added by new client patches resolve by name
+// without the user maintaining anything. The source and cadence are fixed (no setting, nothing
+// user-visible): at most once a week, the list on disk is replaced with the current community
+// listfile. Any problem (offline, server error, short payload) leaves the existing list in place,
+// so a failed refresh can never break startup. Streams to a temp file to keep memory flat, then
+// swaps it in atomically. Reuses the generic "Loading file list..." step so nothing about a
+// network fetch surfaces in the UI.
+static void refreshCommunityListfile(const QString & localPath, LoadingDialog * progress)
+{
+  const QFileInfo fi(localPath);
+  if (fi.exists() && fi.lastModified().isValid() &&
+      fi.lastModified().daysTo(QDateTime::currentDateTime()) < 7)
+    return; // recent enough; nothing to do
+
+  const QString tmpPath = localPath + ".new";
+  QFile out(tmpPath);
+  if (!out.open(QIODevice::WriteOnly))
+    return; // can't stage a download here; keep what's on disk
+
+  QNetworkAccessManager manager;
+  QNetworkRequest request(QUrl("https://github.com/wowdev/wow-listfile/releases/latest/download/community-listfile.csv"));
+  request.setRawHeader("User-Agent", "WoWModelViewer");
+  request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
+  QNetworkReply * reply = manager.get(request);
+
+  // Write each chunk straight to disk as it arrives instead of buffering the whole list.
+  QObject::connect(reply, &QNetworkReply::readyRead, [&out, reply]() {
+    out.write(reply->readAll());
+  });
+
+  QEventLoop loop;
+  QObject::connect(reply, SIGNAL(finished()), &loop, SLOT(quit()));
+  QObject::connect(reply, SIGNAL(error(QNetworkReply::NetworkError)), &loop, SLOT(quit()));
+  if (progress)
+  {
+    LoadingDialog * pd = progress;
+    QObject::connect(reply, &QNetworkReply::downloadProgress, [pd](qint64 received, qint64 total) {
+      // Pumps the wx loading dialog (step() yields) during the otherwise-blocking download and
+      // inches the gauge 45 -> 60.
+      const float frac = (total > 0) ? (float)received / (float)total : 0.0f;
+      pd->step(_("Loading file list..."), 45 + (int)(frac * 15.0f));
+    });
+  }
+  loop.exec();
+
+  const bool ok = (reply->error() == QNetworkReply::NoError);
+  out.close();
+  const qint64 size = QFileInfo(tmpPath).size();
+
+  // A real listfile is tens of MB of "<id>;<path>" lines; anything much smaller is an error page
+  // or a truncated transfer, so keep the existing list rather than overwrite it with junk.
+  if (ok && size > (50 * 1024 * 1024))
+  {
+    if (QFile::exists(localPath))
+      QFile::remove(localPath);
+    if (QFile::rename(tmpPath, localPath))
+    {
+      LOG_INFO << "File list refreshed (" << size << "bytes).";
+      return;
+    }
+    LOG_ERROR << "File list refresh: could not replace" << localPath;
+  }
+  else
+  {
+    LOG_INFO << "File list refresh skipped; keeping existing list.";
+  }
+  QFile::remove(tmpPath); // discard the partial/unused temp file
+}
+
 void ModelViewer::LoadWoW(const core::GameConfig * chosenConfig, const QString & profileOverride, bool showProgress)
 {
   fileControl->Disable();
@@ -1753,9 +1830,28 @@ void ModelViewer::LoadWoW(const core::GameConfig * chosenConfig, const QString &
 
   config = configsFound[0];
 
+  // Diagnostic override (env-only, nothing in the UI): WMV_FORCE_BUILD=<version> pins the load to
+  // a specific build present in the install -- e.g. a PTR build that the retail-preferring
+  // auto-pick would otherwise skip. Used to exercise a new client's table layouts.
+  const QString forceBuild = qEnvironmentVariable("WMV_FORCE_BUILD");
+  bool configForced = false;
+  if (!forceBuild.isEmpty())
+  {
+    for (size_t i = 0; i < configsFound.size(); i++)
+      if (configsFound[i].version == forceBuild)
+      {
+        config = configsFound[i];
+        configForced = true;
+        LOG_INFO << "WMV_FORCE_BUILD selected config:" << config.locale << config.product << config.version;
+        break;
+      }
+    if (!configForced)
+      LOG_WARNING << "WMV_FORCE_BUILD" << forceBuild << "not found among detected configs";
+  }
+
   unsigned int nbConfigs = configsFound.size();
 
-  if (nbConfigs > 1)
+  if (!configForced && nbConfigs > 1)
   {
     // Decide whether we actually need to ask the user. If every config is for the
     // same locale (e.g. .build.info lists several builds of one install, like
@@ -1883,17 +1979,55 @@ void ModelViewer::LoadWoW(const core::GameConfig * chosenConfig, const QString &
   {
     QStringList ver = GAMEDIRECTORY.version().split('.');
     baseConfigFolder = "games/wow/" + ver[0] + "." + ver[1] + "/";
+
+    // A client newer than the shipped schema (e.g. a PTR like 12.1 when only the 12.0 profile
+    // ships) has no exact games/wow/<major>.<minor>/ folder, which would leave the database empty.
+    // Fall back to the newest available profile for the same major version. The per-file layout
+    // matching in WoWDatabase::refreshStructures then corrects any columns that moved in the newer
+    // build, so a new patch works without shipping a dedicated profile folder for it.
+    if (!QDir(baseConfigFolder).exists())
+    {
+      const QStringList profiles =
+        QDir("games/wow").entryList(QStringList() << (ver[0] + ".*"), QDir::Dirs | QDir::NoDotAndDotDot);
+      int bestMinor = -1;
+      QString best;
+      for (const QString & p : profiles)
+      {
+        const QStringList pp = p.split('.');
+        bool ok = false;
+        const int minor = (pp.size() >= 2) ? pp[1].toInt(&ok) : 0;
+        if (ok && minor > bestMinor)
+        {
+          bestMinor = minor;
+          best = p;
+        }
+      }
+      if (!best.isEmpty())
+      {
+        LOG_INFO << "No data profile for build" << GAMEDIRECTORY.version()
+                 << "- falling back to newest available profile" << best;
+        baseConfigFolder = "games/wow/" + best + "/";
+      }
+      else
+      {
+        LOG_WARNING << "No data profile found for major version" << ver[0]
+                    << "(expected games/wow/" << (ver[0] + ".x") << ") - database will be empty";
+      }
+    }
   }
 
   LOG_INFO << "Using following folder to read game info" << baseConfigFolder;
   core::Game::instance().setConfigFolder(baseConfigFolder);
 
   if (progress) progress->step(_("Loading file list..."), 45);
+  // Hidden weekly refresh of the file list before it is parsed (no setting, falls back to the
+  // on-disk copy on any failure). Advances the gauge 45 -> 60 while downloading.
+  refreshCommunityListfile(core::Game::instance().configFolder() + "../../../listfile.csv", progress);
   if (progress)
   {
     LoadingDialog * pd = progress;
     GAMEDIRECTORY.setLoadProgressCallback([pd](float frac) {
-      pd->step(_("Loading file list..."), 45 + (int)(frac * 27.0f)); // advance 45 -> 72 during the parse
+      pd->step(_("Loading file list..."), 60 + (int)(frac * 12.0f)); // advance 60 -> 72 during the parse
     });
   }
   GAMEDIRECTORY.initFromListfile("../../../listfile.csv");
